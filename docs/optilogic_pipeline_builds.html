@@ -1,0 +1,1473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Optilogic Input Pipeline</title>
+<meta name="description" content="All four Optilogic model builds end to end in run order — measure, delivery, collection, combine — with what each reads, writes and asserts.">
+<style>
+:root{
+  color-scheme:light;
+  --ground:#F7F9FB; --panel:#FFFFFF; --panel-2:#F2F5F8;
+  --rule:#D5DDE4; --rule-soft:#E6ECF1;
+  --ink:#0F2E4E; --body:#3A4A5A; --mute:#6B7682;
+  --source:#6B7682; --observed:#0F2E4E; --assumed:#1F8A8C; --gate:#C87A1E;
+  --source-fill:#EDF0F3; --observed-fill:#E7EDF3; --assumed-fill:#E4F1F1; --gate-fill:#F8EEE0;
+  --font-sans:"Segoe UI",Calibri,ui-sans-serif,-apple-system,BlinkMacSystemFont,Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#0E151D; --panel:#151E28; --panel-2:#1B2733;
+    --rule:#2A3846; --rule-soft:#222E3A;
+    --ink:#E4EDF5; --body:#AFC0CF; --mute:#7C8B99;
+    --source:#93A3B1; --observed:#8FB8DE; --assumed:#4FC7C9; --gate:#E4A84E;
+    --source-fill:#1E2831; --observed-fill:#192735; --assumed-fill:#14292E; --gate-fill:#2C2418;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#0E151D; --panel:#151E28; --panel-2:#1B2733;
+  --rule:#2A3846; --rule-soft:#222E3A;
+  --ink:#E4EDF5; --body:#AFC0CF; --mute:#7C8B99;
+  --source:#93A3B1; --observed:#8FB8DE; --assumed:#4FC7C9; --gate:#E4A84E;
+  --source-fill:#1E2831; --observed-fill:#192735; --assumed-fill:#14292E; --gate-fill:#2C2418;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--body);
+  font-family:var(--font-sans); font-size:16px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1000px;margin:0 auto;padding:56px 24px 96px}
+
+/* ── type ─────────────────────────────────────────────── */
+.eyebrow{
+  font-family:var(--font-mono); font-size:11px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--mute); margin:0 0 14px;
+}
+h1{
+  font-size:clamp(30px,4.4vw,44px); line-height:1.08; letter-spacing:-.022em;
+  font-weight:650; color:var(--ink); margin:0 0 18px; text-wrap:balance;
+}
+h2{
+  font-size:23px; line-height:1.25; letter-spacing:-.016em; font-weight:650;
+  color:var(--ink); margin:0; text-wrap:balance;
+}
+h3{
+  font-size:15px; font-weight:650; color:var(--ink); margin:0 0 6px;
+  letter-spacing:-.005em;
+}
+.lede{font-size:18px; max-width:66ch; margin:0}
+p{margin:0; max-width:70ch}
+b,strong{color:var(--ink); font-weight:640}
+code{
+  font-family:var(--font-mono); font-size:.855em; color:var(--ink);
+  background:var(--panel-2); border:1px solid var(--rule-soft);
+  border-radius:4px; padding:1px 5px; white-space:nowrap;
+}
+a{color:var(--assumed)}
+
+/* ── rhythm ───────────────────────────────────────────── */
+header.top{
+  display:flex; flex-direction:column; gap:0;
+  padding-bottom:34px; border-bottom:2px solid var(--ink); margin-bottom:38px;
+}
+main{display:flex; flex-direction:column; gap:60px}
+section{display:flex; flex-direction:column; gap:20px}
+.sec-head{display:flex; gap:16px; align-items:baseline}
+.step{
+  font-family:var(--font-mono); font-size:12px; font-weight:700; letter-spacing:.06em;
+  color:var(--assumed); border:1px solid var(--assumed); border-radius:3px;
+  padding:2px 7px; flex:none; line-height:1.35;
+}
+.prose{display:flex; flex-direction:column; gap:14px}
+
+/* ── figures ──────────────────────────────────────────── */
+figure{
+  margin:0; background:var(--panel); border:1px solid var(--rule);
+  border-radius:8px; overflow:hidden;
+}
+.figbody{overflow-x:auto; padding:20px 18px 10px}
+figure svg{display:block; max-width:100%; height:auto; min-width:640px}
+figcaption{
+  border-top:1px solid var(--rule-soft); padding:11px 18px;
+  font-family:var(--font-mono); font-size:11.5px; line-height:1.6; color:var(--mute);
+}
+figcaption b{color:var(--body); font-weight:600}
+
+/* svg roles */
+.s-node{fill:var(--source-fill); stroke:var(--source)}
+.o-node{fill:var(--observed-fill); stroke:var(--observed)}
+.a-node{fill:var(--assumed-fill); stroke:var(--assumed)}
+.g-node{fill:var(--gate-fill); stroke:var(--gate)}
+.p-node{fill:var(--panel-2); stroke:var(--rule)}
+.s-node,.o-node,.a-node,.g-node,.p-node{stroke-width:1.4; rx:4}
+.lbl{font-family:var(--font-sans); font-size:12.5px; fill:var(--ink)}
+.lbl-s{font-family:var(--font-mono); font-size:10.5px; fill:var(--mute)}
+.lbl-h{font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; fill:var(--mute)}
+.lbl-arr{font-family:var(--font-mono); font-size:10px; fill:var(--mute)}
+.wire{stroke:var(--source); stroke-width:1.4; fill:none}
+.wire-o{stroke:var(--observed); stroke-width:1.4; fill:none}
+.wire-a{stroke:var(--assumed); stroke-width:1.4; fill:none}
+.wire-g{stroke:var(--gate); stroke-width:1.4; fill:none; stroke-dasharray:5 3}
+.wire-dep{stroke:var(--ink); stroke-width:1.1; fill:none; opacity:.5}
+.tick{stroke:var(--rule); stroke-width:1}
+
+/* ── legend ───────────────────────────────────────────── */
+.legend{
+  display:flex; flex-wrap:wrap; gap:8px 22px; align-items:center;
+  margin-top:22px; font-family:var(--font-mono); font-size:11.5px; color:var(--mute);
+}
+.legend span{display:inline-flex; align-items:center; gap:8px}
+.legend i{width:13px; height:13px; border-radius:3px; border:1.4px solid; flex:none}
+.li-s{background:var(--source-fill); border-color:var(--source)}
+.li-o{background:var(--observed-fill); border-color:var(--observed)}
+.li-a{background:var(--assumed-fill); border-color:var(--assumed)}
+.li-g{background:var(--gate-fill); border-color:var(--gate)}
+
+/* ── cards ────────────────────────────────────────────── */
+.cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(258px,1fr)); gap:14px}
+.card{
+  background:var(--panel); border:1px solid var(--rule); border-radius:8px;
+  border-left:3px solid var(--nc,var(--rule)); padding:16px 18px;
+  display:flex; flex-direction:column; gap:10px;
+}
+.card.src{--nc:var(--source)} .card.obs{--nc:var(--observed)} .card.asm{--nc:var(--assumed)}
+.card .kick{
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--nc); font-weight:700;
+}
+.card p{font-size:14px; line-height:1.55}
+.filelist{
+  list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:5px;
+  font-family:var(--font-mono); font-size:11.5px; color:var(--body);
+}
+.filelist li{display:flex; gap:8px; line-height:1.45}
+.filelist li::before{content:"·"; color:var(--nc); font-weight:700; flex:none}
+
+/* ── tables ───────────────────────────────────────────── */
+.tablewrap{
+  overflow-x:auto; background:var(--panel);
+  border:1px solid var(--rule); border-radius:8px;
+}
+table{border-collapse:collapse; width:100%; font-size:13.5px}
+th,td{padding:9px 14px; text-align:left; border-bottom:1px solid var(--rule-soft)}
+th{
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--mute); font-weight:600; background:var(--panel-2); white-space:nowrap;
+}
+td.t{font-family:var(--font-mono); font-size:12px; color:var(--ink); white-space:nowrap}
+td.n{text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap}
+td.src{color:var(--body)}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--panel-2)}
+
+/* ── callout ──────────────────────────────────────────── */
+.note{
+  background:var(--panel); border:1px solid var(--rule);
+  border-left:3px solid var(--gate); border-radius:8px; padding:16px 18px;
+  display:flex; flex-direction:column; gap:8px;
+}
+.note .kick{
+  font-family:var(--font-mono); font-size:10.5px; letter-spacing:.12em;
+  text-transform:uppercase; color:var(--gate); font-weight:700;
+}
+.note p{font-size:14px; line-height:1.55}
+
+.eq{
+  font-family:var(--font-mono); font-size:14px; color:var(--ink);
+  background:var(--panel-2); border:1px solid var(--rule-soft); border-radius:6px;
+  padding:14px 18px; overflow-x:auto; white-space:nowrap;
+}
+
+footer{
+  margin-top:72px; padding-top:22px; border-top:1px solid var(--rule);
+  font-family:var(--font-mono); font-size:11.5px; line-height:1.7; color:var(--mute);
+}
+footer p{max-width:78ch}
+
+@media (max-width:640px){
+  .wrap{padding:36px 16px 64px}
+  .sec-head{flex-direction:column; gap:8px}
+  .step{align-self:flex-start}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+:focus-visible{outline:2px solid var(--assumed); outline-offset:2px}
+
+/* ── document-level parts ─────────────────────────────── */
+.part{
+  display:flex; gap:20px; align-items:flex-start;
+  padding-top:14px; border-top:2px solid var(--ink); margin-top:16px;
+}
+.part .num{
+  font-family:var(--font-mono); font-size:34px; font-weight:700; line-height:1;
+  color:var(--ink); letter-spacing:-.04em; flex:none; padding-top:4px;
+  font-variant-numeric:tabular-nums;
+}
+.part .txt{display:flex; flex-direction:column; gap:10px}
+.part h2{font-size:27px}
+.part .script{
+  font-family:var(--font-mono); font-size:11.5px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--mute);
+}
+.part p{font-size:16.5px; max-width:68ch}
+main>.chapter{display:flex; flex-direction:column; gap:44px; scroll-margin-top:20px}
+main{gap:76px}
+
+/* ── contents ─────────────────────────────────────────── */
+.toc{
+  background:var(--panel); border:1px solid var(--rule); border-radius:8px;
+  padding:8px 10px; display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:2px;
+}
+.toc a{
+  display:flex; gap:12px; align-items:baseline; padding:11px 12px; border-radius:6px;
+  text-decoration:none; color:var(--body); font-size:14px; line-height:1.4;
+}
+.toc a:hover{background:var(--panel-2)}
+.toc .n{
+  font-family:var(--font-mono); font-size:11px; font-weight:700; color:var(--assumed);
+  flex:none; padding-top:1px;
+}
+.toc .t{display:flex; flex-direction:column; gap:2px}
+.toc b{color:var(--ink); font-weight:640}
+.toc span{font-family:var(--font-mono); font-size:10.5px; color:var(--mute)}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header class="top">
+  <p class="eyebrow">Melbourne catchment model · the Optilogic input pipeline</p>
+  <h1>Four builds, in the order they have to run</h1>
+  <p class="lede">Raw scan events at one end, a folder you upload to Optilogic at the other. Each
+  step is a script you can run on its own, and the order between them is a real dependency — not a
+  convention. This is all four, end to end, with the arithmetic each one is responsible for.</p>
+  <div class="legend">
+    <span><i class="li-s"></i>Source data — the day itself</span>
+    <span><i class="li-o"></i>Observed — measured from scans</span>
+    <span><i class="li-a"></i>Assumed — dials we chose</span>
+    <span><i class="li-g"></i>Gate — asserts, or the build stops</span>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <nav class="toc" aria-label="Contents">
+    <a href="#s1"><span class="n">1</span><span class="t"><b>The measurement</b><span>export_model_factors.py</span></span></a>
+    <a href="#s2"><span class="n">2</span><span class="t"><b>The delivery entity</b><span>src/chain2</span></span></a>
+    <a href="#s3"><span class="n">3</span><span class="t"><b>The collection entity</b><span>src/chain1</span></span></a>
+    <a href="#s4"><span class="n">4</span><span class="t"><b>The combined model</b><span>src/final</span></span></a>
+  </nav>
+</section>
+
+<section>
+  <div class="sec-head"><h2>The dependency, which is not the same as the order</h2></div>
+  <div class="prose">
+    <p>Three of the four are genuinely chained. The fourth is not: <b>chain 1 does not read chain 2</b>
+    — it is extracted from an older build that had both chains together, so it can be run at any
+    point before the merge. It sits third because that is where it is least confusing, not because
+    step 2 produces anything it needs.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1180 400" role="img" aria-label="The four builds and their dependencies: export writes the observed factors that chain 2 reads; chain 1 is extracted independently from the Change 27 build; the final merge reads both entity folders off disk. Chain 1 does not depend on chain 2.">
+        <defs>
+          <marker id="arZ" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="16" y="20">1 · MEASURE</text>
+        <text class="lbl-h" x="316" y="20">2 · DELIVERY</text>
+        <text class="lbl-h" x="616" y="20">3 · COLLECTION</text>
+        <text class="lbl-h" x="916" y="20">4 · COMBINE</text>
+
+        <rect class="s-node" x="16" y="40" width="220" height="80"></rect>
+        <text class="lbl" x="30" y="64" font-weight="600">raw scan CSV</text>
+        <text class="lbl-s" x="30" y="86">2.96 M events · 393 MB</text>
+        <text class="lbl-s" x="30" y="104">delivery-side extract</text>
+
+        <rect class="o-node" x="16" y="150" width="220" height="96"></rect>
+        <text class="lbl" x="30" y="174" font-weight="600">export_model_factors</text>
+        <text class="lbl-s" x="30" y="196">reduce · derive · filter</text>
+        <text class="lbl-s" x="30" y="214">minutes, not seconds</text>
+        <text class="lbl-s" x="30" y="234">→ factors_observed/</text>
+
+        <rect class="o-node" x="316" y="150" width="220" height="96"></rect>
+        <text class="lbl" x="330" y="174" font-weight="600">chain 2</text>
+        <text class="lbl-s" x="330" y="196">20 tables, entirely</text>
+        <text class="lbl-s" x="330" y="214">measured</text>
+        <text class="lbl-s" x="330" y="234">D = stage + VIC + INT</text>
+
+        <rect class="a-node" x="616" y="150" width="220" height="96"></rect>
+        <text class="lbl" x="630" y="174" font-weight="600">chain 1</text>
+        <text class="lbl-s" x="630" y="196">17 tables, selected by</text>
+        <text class="lbl-s" x="630" y="214">family — assumptions</text>
+        <text class="lbl-s" x="630" y="234">P = OUT + L</text>
+
+        <rect class="a-node" x="616" y="40" width="220" height="80"></rect>
+        <text class="lbl" x="630" y="64" font-weight="600">the Change 27 build</text>
+        <text class="lbl-s" x="630" y="86">the last model with both</text>
+        <text class="lbl-s" x="630" y="104">chains together</text>
+
+        <rect class="p-node" x="916" y="150" width="248" height="96"></rect>
+        <text class="lbl" x="930" y="174" font-weight="600">final</text>
+        <text class="lbl-s" x="930" y="196">20 tables — upload this</text>
+        <text class="lbl-s" x="930" y="214">two ledgers, not one</text>
+        <text class="lbl-s" x="930" y="234">identity</text>
+
+        <path class="wire" d="M126,120 L126,144" marker-end="url(#arZ)"></path>
+        <path class="wire-a" d="M726,120 L726,144" marker-end="url(#arZ)"></path>
+        <text class="lbl-arr" x="736" y="138">selected from</text>
+
+        <path class="wire-o" d="M236,198 L310,198" marker-end="url(#arZ)"></path>
+        <text class="lbl-arr" x="242" y="190">the 11 factor CSVs</text>
+
+        <path class="wire-o" d="M536,198 L580,198 L580,300 L1040,300 L1040,252" marker-end="url(#arZ)"></path>
+        <path class="wire-a" d="M836,198 L910,198" marker-end="url(#arZ)"></path>
+        <text class="lbl-arr" x="842" y="190">its folder</text>
+        <text class="lbl-arr" x="600" y="316">chain 2's folder — read back OFF DISK, which is what makes the order a dependency</text>
+
+        <path class="wire-g" d="M310,214 C270,236 250,236 242,222" marker-end="url(#arZ)"></path>
+        <text class="lbl-arr" x="252" y="252">the drift guard re-derives the factors from the scan</text>
+        <text class="lbl-arr" x="252" y="268">cache and refuses to build if they disagree</text>
+
+        <line class="tick" x1="586" y1="36" x2="586" y2="284"></line>
+        <text class="lbl-arr" x="596" y="360">no arrow crosses this line: chain 1 never reads chain 2</text>
+      </svg>
+    </div>
+    <figcaption><b>What depends on what.</b> Step 1 → step 2 is a hard dependency, enforced by the
+    drift guard. Step 2 and step 3 → step 4 are hard dependencies, enforced by reading the folders
+    off disk. Step 3 depends on neither of the first two.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Running it</h2></div>
+  <div class="prose">
+    <div class="eq">uv run python build_all.py                  # all four, in order
+uv run python build_all.py --skip-export    # start at chain 2 (no raw scans here)
+uv run python build_all.py --rebuild        # re-read the raw scan CSV in step 1</div>
+    <p>Each step is also a script on its own, and the package form
+    (<code>python -m src all</code>) runs the same path one module per table. Where the raw scans
+    do not live — a DataStar workspace — step 1 cannot run and the drift guard has nothing to
+    compare against: use <code>--skip-export</code>, and treat the committed
+    <code>inputs/factors_observed/</code> as the measurement.</p>
+  </div>
+</section>
+
+<div class="chapter" id="s1">
+  <div class="part">
+    <div class="num">1</div>
+    <div class="txt">
+      <p class="script">export_model_factors.py</p>
+      <h2>The measurement</h2>
+      <p>Scans to factors — the only step that reads the raw events, and the only one that filters.</p>
+    </div>
+  </div>
+<section>
+  <div class="sec-head"><span class="step">REDUCTION</span><h2>The reduction — one row per parcel</h2></div>
+  <div class="prose">
+    <p>Six steps, read top to bottom, in the order a parcel experiences them: it is lodged,
+    Melbourne sorts it, a depot delivers it. Each step owns a named set of columns and nothing
+    else, so any column in the output can be traced to the one rule that produced it.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1180 470" role="img" aria-label="The reduction: the raw scan CSV is ordered by event sequence, then six steps each own a group of columns — identity, presence, source, sortation, delivery — producing one row per consignment, cached to a pickle.">
+        <defs>
+          <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="16" y="20">RAW</text>
+        <text class="lbl-h" x="300" y="20">SIX STEPS, EACH OWNING ITS OWN COLUMNS</text>
+        <text class="lbl-h" x="946" y="20">ONE ROW PER PARCEL</text>
+
+        <rect class="s-node" x="16" y="150" width="200" height="126"></rect>
+        <text class="lbl" x="30" y="174" font-weight="600">all_scan_…csv</text>
+        <text class="lbl-s" x="30" y="196">2,962,228 events</text>
+        <text class="lbl-s" x="30" y="213">62 event types</text>
+        <text class="lbl-s" x="30" y="230">393 MB</text>
+        <line class="tick" x1="30" y1="244" x2="202" y2="244"></line>
+        <text class="lbl-s" x="30" y="264">delivery-side extract</text>
+
+        <rect class="p-node" x="300" y="36" width="330" height="42"></rect>
+        <text class="lbl" x="314" y="54">0 · read_scans</text>
+        <text class="lbl-s" x="314" y="70">ordered by Event_seq — the only order we trust</text>
+
+        <rect class="o-node" x="300" y="92" width="330" height="56"></rect>
+        <text class="lbl" x="314" y="112">0b · consignment_identity</text>
+        <text class="lbl-s" x="314" y="128">class, article count, and the delivering depot:</text>
+        <text class="lbl-s" x="314" y="142">delivery scan where it names one, else the plan</text>
+
+        <rect class="o-node" x="300" y="162" width="330" height="42"></rect>
+        <text class="lbl" x="314" y="180">0c · presence_scans</text>
+        <text class="lbl-s" x="314" y="196">every building it touched, repeats collapsed</text>
+
+        <rect class="o-node" x="300" y="218" width="330" height="56"></rect>
+        <text class="lbl" x="314" y="238">1 · source — where it came from</text>
+        <text class="lbl-s" x="314" y="254">lodge scan for 94.21%; the rest read off four</text>
+        <text class="lbl-s" x="314" y="268">origin-end events, or abstain</text>
+
+        <rect class="o-node" x="300" y="288" width="330" height="56"></rect>
+        <text class="lbl" x="314" y="308">2 · sortation — what Melbourne did</text>
+        <text class="lbl-s" x="314" y="324">the sort chain, the site that first handled it,</text>
+        <text class="lbl-s" x="314" y="338">and therefore the cross-dock</text>
+
+        <rect class="o-node" x="300" y="358" width="330" height="56"></rect>
+        <text class="lbl" x="314" y="378">3 · delivery — how it ended up</text>
+        <text class="lbl-s" x="314" y="394">kept_on_site, the delivery date, the source band</text>
+        <text class="lbl-s" x="314" y="408">stage / interstate / Victoria</text>
+
+        <rect class="o-node" x="700" y="150" width="200" height="126"></rect>
+        <text class="lbl" x="714" y="174" font-weight="600">the reduction</text>
+        <text class="lbl-s" x="714" y="196">163,250 rows</text>
+        <text class="lbl-s" x="714" y="213">43 columns</text>
+        <text class="lbl-s" x="714" y="230">167,445 articles</text>
+        <line class="tick" x1="714" y1="244" x2="886" y2="244"></line>
+        <text class="lbl-s" x="714" y="264">1.026 articles per row</text>
+
+        <rect class="p-node" x="946" y="106" width="216" height="60"></rect>
+        <text class="lbl" x="960" y="128">consignment_paths.pkl</text>
+        <text class="lbl-s" x="960" y="148">the cache — and the drift guard's yardstick</text>
+
+        <rect class="p-node" x="946" y="180" width="216" height="60"></rect>
+        <text class="lbl" x="960" y="202">full_path.csv</text>
+        <text class="lbl-s" x="960" y="222">the same rows, readable</text>
+
+        <rect class="p-node" x="946" y="254" width="216" height="76"></rect>
+        <text class="lbl" x="960" y="276">event_coverage.json</text>
+        <text class="lbl" x="960" y="296">pdc_basis.json</text>
+        <text class="lbl-s" x="960" y="316">what each rule cost, per rebuild</text>
+
+        <path class="wire" d="M216,213 L294,213" marker-end="url(#arA)"></path>
+        <path class="wire-o" d="M630,213 L694,213" marker-end="url(#arA)"></path>
+        <path class="wire-o" d="M900,196 L924,196 L924,136 L940,136" marker-end="url(#arA)"></path>
+        <path class="wire-o" d="M900,210 L940,210" marker-end="url(#arA)"></path>
+        <path class="wire-o" d="M900,224 L924,224 L924,292 L940,292" marker-end="url(#arA)"></path>
+      </svg>
+    </div>
+    <figcaption><b>Part 1.</b> Steps 1, 2 and 3 are independent of each other but for two stated
+    dependencies, both in step 3. The output is cached, and that cache is what every downstream
+    build re-derives against.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Three evidence bars, deliberately different</h2></div>
+  <div class="prose">
+    <p>Eight scan events can place a parcel in a building, and the script uses three different
+    subsets of them for three different questions. They are not a trust ranking — they differ only
+    on the boundary events, and the rule that decides each cell is <b>what does a false positive
+    cost this particular number?</b></p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 940 250" role="img" aria-label="A matrix of eight scan events against three evidence sets. All three share the five dock events. HANDLED excludes accept, lodge and deliver; PHYSICAL includes all three; ARRIVAL includes accept only.">
+        <text class="lbl-h" x="16" y="22">THE FIVE DOCK EVENTS — SHARED BY ALL THREE</text>
+        <text class="lbl-h" x="560" y="22">THE THREE BOUNDARY EVENTS</text>
+
+        <rect class="p-node" x="16" y="34" width="512" height="30"></rect>
+        <text class="lbl-s" x="28" y="53">UNLOAD_ITEMS · DEPART_CONTAINER · LOAD_ITEM · TRANSFER · MACHINE_SORT</text>
+
+        <text class="lbl-s" x="600" y="53" text-anchor="middle">ACCEPT_FACILITY</text>
+        <text class="lbl-s" x="726" y="53" text-anchor="middle">LODGE</text>
+        <text class="lbl-s" x="852" y="53" text-anchor="middle">DELIVER</text>
+
+        <g>
+          <rect class="o-node" x="16" y="80" width="512" height="44"></rect>
+          <text class="lbl" x="28" y="100" font-weight="600">HANDLED</text>
+          <text class="lbl-s" x="28" y="116">did this BUILDING work the parcel? → the cross-dock</text>
+          <rect class="p-node" x="556" y="80" width="88" height="44"></rect><text class="lbl-s" x="600" y="107" text-anchor="middle">out</text>
+          <rect class="p-node" x="682" y="80" width="88" height="44"></rect><text class="lbl-s" x="726" y="107" text-anchor="middle">out</text>
+          <rect class="p-node" x="808" y="80" width="88" height="44"></rect><text class="lbl-s" x="852" y="107" text-anchor="middle">out</text>
+
+          <rect class="o-node" x="16" y="134" width="512" height="44"></rect>
+          <text class="lbl" x="28" y="154" font-weight="600">PHYSICAL</text>
+          <text class="lbl-s" x="28" y="170">was it in this building at all? → the journey chain</text>
+          <rect class="o-node" x="556" y="134" width="88" height="44"></rect><text class="lbl-s" x="600" y="161" text-anchor="middle">in</text>
+          <rect class="o-node" x="682" y="134" width="88" height="44"></rect><text class="lbl-s" x="726" y="161" text-anchor="middle">in</text>
+          <rect class="o-node" x="808" y="134" width="88" height="44"></rect><text class="lbl-s" x="852" y="161" text-anchor="middle">in</text>
+
+          <rect class="o-node" x="16" y="188" width="512" height="44"></rect>
+          <text class="lbl" x="28" y="208" font-weight="600">ARRIVAL</text>
+          <text class="lbl-s" x="28" y="224">did this DEPOT take it into stock? → kept_on_site</text>
+          <rect class="o-node" x="556" y="188" width="88" height="44"></rect><text class="lbl-s" x="600" y="215" text-anchor="middle">in</text>
+          <rect class="p-node" x="682" y="188" width="88" height="44"></rect><text class="lbl-s" x="726" y="215" text-anchor="middle">out</text>
+          <rect class="p-node" x="808" y="188" width="88" height="44"></rect><text class="lbl-s" x="852" y="215" text-anchor="middle">out</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption><b>The hinge is ACCEPT_FACILITY.</b> A wrong cross-dock invents a truck leg and a
+    dock touch the model then pays for, so that number takes the core alone. A missed building only
+    breaks a descriptive chain, so that one takes the widest net. Counting acceptance as a
+    cross-dock would take it from 10.5% of the day to 18.6%.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><span class="step">FACTORS</span><h2>The factors — and the four dials that cut them</h2></div>
+  <div class="prose">
+    <p>The per-parcel rows become the model's factors here, and this is the only place the filters
+    are applied. That is deliberate: chain 2 consumes whatever it got and cannot quietly re-filter
+    the measurement it is meant to be reproducing.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1180 430" role="img" aria-label="Part two: the per-parcel rows pass through cohort selection, then split into the joint factors and the stage matrices, each with its own filter dials, producing eleven CSVs plus a provenance file.">
+        <defs>
+          <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="16" y="20">ROWS</text>
+        <text class="lbl-h" x="236" y="20">COHORT</text>
+        <text class="lbl-h" x="470" y="20">DERIVE</text>
+        <text class="lbl-h" x="716" y="20">FILTER — THE DIALS BITE HERE</text>
+        <text class="lbl-h" x="1000" y="20">WRITE</text>
+
+        <rect class="o-node" x="16" y="152" width="180" height="90"></rect>
+        <text class="lbl" x="30" y="176" font-weight="600">163,250 rows</text>
+        <text class="lbl-s" x="30" y="198">one per parcel,</text>
+        <text class="lbl-s" x="30" y="214">43 columns</text>
+
+        <rect class="a-node" x="236" y="152" width="182" height="90"></rect>
+        <text class="lbl" x="250" y="176">cohort()</text>
+        <text class="lbl-s" x="250" y="196">OBS_COHORT = all_dates</text>
+        <text class="lbl-s" x="250" y="212">drops origin=UNKNOWN</text>
+        <text class="lbl-s" x="250" y="230">→ 166,849 EA</text>
+
+        <rect class="o-node" x="470" y="76" width="196" height="76"></rect>
+        <text class="lbl" x="484" y="98">derive()</text>
+        <text class="lbl-s" x="484" y="116">the three-way split per</text>
+        <text class="lbl-s" x="484" y="131">depot × class, the single-</text>
+        <text class="lbl-s" x="484" y="146">sort shares, the xdock</text>
+
+        <rect class="o-node" x="470" y="242" width="196" height="76"></rect>
+        <text class="lbl" x="484" y="264">derive_stages()</text>
+        <text class="lbl-s" x="484" y="282">the four Sankey stages as</text>
+        <text class="lbl-s" x="484" y="297">matrices: handling → sort,</text>
+        <text class="lbl-s" x="484" y="312">round 2, despatch → depot</text>
+
+        <rect class="a-node" x="716" y="60" width="212" height="108"></rect>
+        <text class="lbl" x="730" y="82">filter_factors()</text>
+        <text class="lbl-s" x="730" y="102">OBS_MIN_CLASS_SITE 750 EA</text>
+        <text class="lbl-s" x="730" y="118">OBS_CELL_FLOOR 5%</text>
+        <line class="tick" x1="730" y1="130" x2="914" y2="130"></line>
+        <text class="lbl-s" x="730" y="148">folded volume is renormalised</text>
+        <text class="lbl-s" x="730" y="162">WITHIN its origin family</text>
+
+        <rect class="a-node" x="716" y="182" width="212" height="52"></rect>
+        <text class="lbl" x="730" y="204">round2_sites()</text>
+        <text class="lbl-s" x="730" y="222">ROUND2_MIN_SHARE 10%</text>
+
+        <rect class="a-node" x="716" y="248" width="212" height="90"></rect>
+        <text class="lbl" x="730" y="270">filter_stages()</text>
+        <text class="lbl-s" x="730" y="290">OBS_LANE_FLOOR 0.5%</text>
+        <text class="lbl-s" x="730" y="306">OBS_LANE_BASIS = column</text>
+        <text class="lbl-s" x="730" y="326">folded lanes go somewhere honest</text>
+
+        <rect class="p-node" x="1000" y="118" width="164" height="158"></rect>
+        <text class="lbl" x="1014" y="142" font-weight="600">factors_observed/</text>
+        <text class="lbl-s" x="1014" y="164">obs_joint</text>
+        <text class="lbl-s" x="1014" y="180">obs_demand</text>
+        <text class="lbl-s" x="1014" y="196">obs_recv_entry</text>
+        <text class="lbl-s" x="1014" y="212">obs_round2</text>
+        <text class="lbl-s" x="1014" y="228">obs_delivery … 10 in all</text>
+        <line class="tick" x1="1014" y1="242" x2="1150" y2="242"></line>
+        <text class="lbl-s" x="1014" y="262">_provenance.csv</text>
+
+        <path class="wire-o" d="M196,197 L230,197" marker-end="url(#arB)"></path>
+        <path class="wire-o" d="M418,180 L444,180 L444,114 L464,114" marker-end="url(#arB)"></path>
+        <path class="wire-o" d="M418,214 L444,214 L444,280 L464,280" marker-end="url(#arB)"></path>
+        <path class="wire-a" d="M666,106 L692,106 L692,114 L710,114" marker-end="url(#arB)"></path>
+        <path class="wire-a" d="M666,130 L692,130 L692,208 L710,208" marker-end="url(#arB)"></path>
+        <path class="wire-a" d="M666,282 L692,282 L692,293 L710,293" marker-end="url(#arB)"></path>
+        <path class="wire-o" d="M928,114 L960,114 L960,180 L994,180" marker-end="url(#arB)"></path>
+        <path class="wire-o" d="M928,208 L994,208" marker-end="url(#arB)"></path>
+        <path class="wire-o" d="M928,293 L960,293 L960,236 L994,236" marker-end="url(#arB)"></path>
+      </svg>
+    </div>
+    <figcaption><b>Part 2.</b> Five dials, all read from <b>factors_assumed/dials.csv</b>, all
+    applied once. <b>_provenance.csv</b> records which thresholds were in force and how much volume
+    each one moved, so a factor table always carries the settings that produced it.</figcaption>
+  </figure>
+  <div class="note">
+    <div class="kick">Why this is a separate step from chain 2</div>
+    <p>It reads 2.96 M events and takes minutes, where chain 2 takes seconds. Splitting them means
+    the expensive measurement is made once and the cheap model build can be re-run freely — and it
+    is what allows chain 2's drift guard to check the committed CSVs against a live re-derivation
+    from the cache. A stale export fails the model, loudly, rather than quietly shipping.</p>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>What comes out</h2></div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>File</th><th>What it carries</th><th>Filtered by</th></tr></thead>
+      <tbody>
+        <tr><td class="t">obs_joint</td><td class="src">depot × class × source band — the three-way split</td><td class="src">class-site min, cell floor</td></tr>
+        <tr><td class="t">obs_demand</td><td class="src">measured delivery volume per depot × class</td><td class="src">—</td></tr>
+        <tr><td class="t">obs_recv_entry</td><td class="src">handling site → first-sort site (the cross-dock)</td><td class="src">lane floor</td></tr>
+        <tr><td class="t">obs_round2</td><td class="src">first-sort → second-sort, ONCE = never re-sorted</td><td class="src">lane floor</td></tr>
+        <tr><td class="t">obs_delivery</td><td class="src">last-sort site → delivering depot</td><td class="src">lane floor</td></tr>
+        <tr><td class="t">obs_single_sort</td><td class="src">the ONCE slice of obs_round2</td><td class="src">lane floor</td></tr>
+        <tr><td class="t">obs_round2_sites</td><td class="src">the sites allowed to run a second sort</td><td class="src">round-2 min share</td></tr>
+        <tr><td class="t">obs_second_sort</td><td class="src">where second sorts actually run (reference)</td><td class="src">unfiltered</td></tr>
+        <tr><td class="t">obs_xdock</td><td class="src">the off-diagonal mass, by class (reference)</td><td class="src">unfiltered</td></tr>
+        <tr><td class="t">obs_stage_origin</td><td class="src">the stage split by lodgement — measured ahead of the model</td><td class="src">unfiltered</td></tr>
+        <tr><td class="t">_provenance</td><td class="src">source, cohort, thresholds, and how much each moved</td><td class="src">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+</div>
+
+<div class="chapter" id="s2">
+  <div class="part">
+    <div class="num">2</div>
+    <div class="txt">
+      <p class="script">src/chain2  ·  build_chain2.py</p>
+      <h2>The delivery entity</h2>
+      <p>Sources, sort and delivery, built entirely from the measured factors.</p>
+    </div>
+  </div>
+<!-- ══ THE SPINE ══════════════════════════════════════════════════ -->
+<section>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1220 600" role="img" aria-label="The chain 2 build: three input folders feed setup, which feeds prepare, which feeds twenty table modules that write CSVs; checks then read those CSVs back off disk and assert them against the measurement made in prepare.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+
+        <text class="lbl-h" x="16" y="20">INPUTS</text>
+        <text class="lbl-h" x="322" y="20">1 · SETUP</text>
+        <text class="lbl-h" x="562" y="20">2 · PREPARE</text>
+        <text class="lbl-h" x="802" y="20">3 · TABLES</text>
+        <text class="lbl-h" x="1042" y="20">5 · OUTPUT</text>
+
+        <!-- inputs -->
+        <rect class="s-node" x="16" y="36" width="256" height="104"></rect>
+        <text class="lbl" x="30" y="58" font-weight="600">inputs/melbourne/</text>
+        <text class="lbl-s" x="30" y="78">temp_clustered.csv — demand</text>
+        <text class="lbl-s" x="30" y="95">cluster_summary.csv — zones</text>
+        <text class="lbl-s" x="30" y="112">all-data.xlsx — coordinates</text>
+        <text class="lbl-s" x="30" y="129">catchment geojson — a count</text>
+
+        <rect class="o-node" x="16" y="156" width="256" height="104"></rect>
+        <text class="lbl" x="30" y="178" font-weight="600">inputs/factors_observed/</text>
+        <text class="lbl-s" x="30" y="198">obs_joint — the 3-way split</text>
+        <text class="lbl-s" x="30" y="215">obs_demand — the magnitude</text>
+        <text class="lbl-s" x="30" y="232">obs_recv_entry / round2 / delivery</text>
+        <text class="lbl-s" x="30" y="249">written by export_model_factors.py</text>
+
+        <rect class="a-node" x="16" y="276" width="256" height="104"></rect>
+        <text class="lbl" x="30" y="298" font-weight="600">inputs/factors_assumed/</text>
+        <text class="lbl-s" x="30" y="318">dials.csv — 32 parameters</text>
+        <text class="lbl-s" x="30" y="335">machine_rates, operating_hours</text>
+        <text class="lbl-s" x="30" y="352">pud_capacity, site_sorters</text>
+        <text class="lbl-s" x="30" y="369">transport_modes, unload_mix …</text>
+
+        <!-- setup -->
+        <rect class="p-node" x="306" y="36" width="200" height="344"></rect>
+        <rect class="o-node" x="320" y="52" width="172" height="44"></rect>
+        <text class="lbl" x="332" y="72">Config</text>
+        <text class="lbl-s" x="332" y="88">dials + assumption CSVs</text>
+        <rect class="o-node" x="320" y="110" width="172" height="60"></rect>
+        <text class="lbl" x="332" y="130">Observed</text>
+        <text class="lbl-s" x="332" y="146">loads the measured</text>
+        <text class="lbl-s" x="332" y="161">factors, then verifies</text>
+        <rect class="o-node" x="320" y="184" width="172" height="74"></rect>
+        <text class="lbl" x="332" y="204">Topology</text>
+        <text class="lbl-s" x="332" y="220">nodes, roles, arrival</text>
+        <text class="lbl-s" x="332" y="235">set, stage lanes,</text>
+        <text class="lbl-s" x="332" y="250">tag families</text>
+        <rect class="p-node" x="320" y="272" width="172" height="44"></rect>
+        <text class="lbl" x="332" y="292">Names · Writer</text>
+        <text class="lbl-s" x="332" y="308">naming, output dir</text>
+        <text class="lbl-s" x="320" y="345">all of it lands on one</text>
+        <text class="lbl-s" x="320" y="361">object: Chain2Model</text>
+
+        <!-- prepare -->
+        <rect class="p-node" x="546" y="36" width="200" height="344"></rect>
+        <rect class="s-node" x="560" y="52" width="172" height="74"></rect>
+        <text class="lbl" x="572" y="72">load_source_data</text>
+        <text class="lbl-s" x="572" y="88">parcels, clusters,</text>
+        <text class="lbl-s" x="572" y="103">nodes — the day and</text>
+        <text class="lbl-s" x="572" y="118">where the buildings are</text>
+        <rect class="o-node" x="560" y="140" width="172" height="128"></rect>
+        <text class="lbl" x="572" y="160">measure_balance</text>
+        <text class="lbl-s" x="572" y="177">the joint applied to</text>
+        <text class="lbl-s" x="572" y="192">the demand table, per</text>
+        <text class="lbl-s" x="572" y="207">depot × class</text>
+        <text class="lbl-s" x="572" y="228">→ MIX, STAGE, IN, VIC</text>
+        <text class="lbl-s" x="572" y="243">→ cross-dock lanes</text>
+        <text class="lbl-s" x="572" y="258">→ depot throughput caps</text>
+        <text class="lbl-s" x="560" y="296">no table of its own —</text>
+        <text class="lbl-s" x="560" y="312">several tables read it</text>
+
+        <!-- tables -->
+        <rect class="p-node" x="786" y="36" width="200" height="344"></rect>
+        <text class="lbl" x="800" y="60" font-weight="600">20 modules, in ORDER</text>
+        <text class="lbl-s" x="800" y="80">one module ⇒ one CSV</text>
+        <text class="lbl-s" x="800" y="104">Facilities, Products,</text>
+        <text class="lbl-s" x="800" y="119">Customers, OriginMix,</text>
+        <text class="lbl-s" x="800" y="134">CustomerDemand, Suppliers,</text>
+        <text class="lbl-s" x="800" y="149">SupplierCapabilities, BOM,</text>
+        <text class="lbl-s" x="800" y="164">WorkCenters, Processes,</text>
+        <text class="lbl-s" x="800" y="179">ProductionPolicies …</text>
+        <text class="lbl-s" x="800" y="194">… FlowConstraints</text>
+        <line class="tick" x1="800" y1="212" x2="972" y2="212"></line>
+        <text class="lbl-s" x="800" y="232">the order is a real</text>
+        <text class="lbl-s" x="800" y="247">dependency chain —</text>
+        <text class="lbl-s" x="800" y="262">each module leaves what</text>
+        <text class="lbl-s" x="800" y="277">the next one needs on</text>
+        <text class="lbl-s" x="800" y="292">Chain2Model</text>
+        <text class="lbl-s" x="800" y="330">see the next figure</text>
+        <text class="lbl-s" x="800" y="346">for which reads which</text>
+
+        <!-- output -->
+        <rect class="p-node" x="1026" y="120" width="178" height="140"></rect>
+        <text class="lbl" x="1040" y="144" font-weight="600">outputs/</text>
+        <text class="lbl" x="1040" y="162" font-weight="600">…chain2_observed/</text>
+        <text class="lbl-s" x="1040" y="184">20 CSV files</text>
+        <text class="lbl-s" x="1040" y="201">the Anura schema</text>
+        <line class="tick" x1="1040" y1="216" x2="1190" y2="216"></line>
+        <text class="lbl-s" x="1040" y="236">merged with chain 1</text>
+        <text class="lbl-s" x="1040" y="251">by build_final.py</text>
+
+        <!-- checks band -->
+        <rect class="g-node" x="546" y="440" width="658" height="112"></rect>
+        <text class="lbl-h" x="562" y="424">4 · CHECKS</text>
+        <text class="lbl" x="562" y="464" font-weight="600">verify_against_measurement</text>
+        <text class="lbl-s" x="562" y="484">reads the written CSVs back off disk and asserts them against what prepare measured:</text>
+        <text class="lbl-s" x="562" y="504">SUP_STAGE_* caps = measured stage · SUP_VIC_* caps = measured Victoria</text>
+        <text class="lbl-s" x="562" y="521">every depot's OriginMix stage share = its measurement, within 0.5 pt</text>
+        <text class="lbl-s" x="562" y="541">a mismatch raises — the build does not produce a folder it cannot vouch for</text>
+
+        <!-- wires: inputs to setup -->
+        <path class="wire" d="M272,88 L300,88" marker-end="url(#ar)"></path>
+        <path class="wire-o" d="M272,208 L300,208" marker-end="url(#ar)"></path>
+        <path class="wire-a" d="M272,328 L292,328 L292,88 L300,88" marker-end="url(#ar)"></path>
+
+        <!-- setup to prepare -->
+        <path class="wire-o" d="M506,208 L540,208" marker-end="url(#ar)"></path>
+        <text class="lbl-arr" x="508" y="200">config +</text>
+        <text class="lbl-arr" x="508" y="228">topology</text>
+
+        <!-- prepare to tables -->
+        <path class="wire-o" d="M746,208 L780,208" marker-end="url(#ar)"></path>
+        <text class="lbl-arr" x="748" y="200">the measured</text>
+        <text class="lbl-arr" x="748" y="228">balance</text>
+
+        <!-- tables to output -->
+        <path class="wire-o" d="M986,190 L1020,190" marker-end="url(#ar)"></path>
+        <text class="lbl-arr" x="988" y="182">writes</text>
+
+        <!-- output down to checks (read back) -->
+        <path class="wire-g" d="M1115,260 L1115,434" marker-end="url(#ar)"></path>
+        <text class="lbl-arr" x="1124" y="352">reads back</text>
+
+        <!-- prepare down to checks (the yardstick) -->
+        <path class="wire-g" d="M646,380 L646,434" marker-end="url(#ar)"></path>
+        <text class="lbl-arr" x="656" y="412">the measurement</text>
+      </svg>
+    </div>
+    <figcaption><b>The whole path.</b> Nothing here loops except the last step: the tables are
+    written to disk, then read back off disk and compared with the measurement made in step 2. The
+    checks are a gate, not a report.</figcaption>
+  </figure>
+</section>
+
+<!-- ══ INPUTS ═════════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><h2>What goes in, and how much of it is a choice</h2></div>
+  <div class="prose">
+    <p>Three folders, and they are not the same kind of thing. Keeping them apart is the point of
+    the arrangement: you can always answer "is this number measured or did we pick it?" by asking
+    which folder it came from.</p>
+  </div>
+  <div class="cards">
+    <div class="card src">
+      <div class="kick">Source data</div>
+      <h3>inputs/melbourne/</h3>
+      <p>The day itself, plus the geography. The demand table is the model's magnitude — the same
+      20 May parcels the scans describe, 14 articles apart.</p>
+      <ul class="filelist">
+        <li><span>temp_clustered.csv — parcel counts by cluster and product</span></li>
+        <li><span>cluster_summary.csv — delivery zone centroids</span></li>
+        <li><span>all-data.xlsx — facility coordinates</span></li>
+      </ul>
+    </div>
+    <div class="card obs">
+      <div class="kick">Observed</div>
+      <h3>inputs/factors_observed/</h3>
+      <p>The measurement, already filtered. <code>export_model_factors.py</code> applies the four
+      filter dials once, here, so chain 2 consumes what it got and cannot re-filter.</p>
+      <ul class="filelist">
+        <li><span>obs_joint — stage / interstate / Victoria per depot × class</span></li>
+        <li><span>obs_demand — the measured delivery magnitude</span></li>
+        <li><span>obs_recv_entry, obs_round2, obs_delivery — the stage lanes</span></li>
+      </ul>
+    </div>
+    <div class="card asm">
+      <div class="kick">Assumed</div>
+      <h3>inputs/factors_assumed/</h3>
+      <p>Hand-managed. Every genuinely chosen number in chain 2 lives in one of these eleven files,
+      which is what makes the assumption count auditable.</p>
+      <ul class="filelist">
+        <li><span>dials.csv — the switches and thresholds</span></li>
+        <li><span>machine_rates, operating_hours, pud_capacity</span></li>
+        <li><span>site_sorters, transport_modes, unload_mix, class_hub_split</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ══ STEP 1 ═════════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><span class="step">SETUP</span><h2>Setup — and the guard that keeps the measurement honest</h2></div>
+  <div class="prose">
+    <p><code>Config</code> reads the dials, <code>Topology</code> derives the network — which sites
+    sort, which depots deliver, which supplier families exist — and <code>Observed</code> loads the
+    measured factors. Then <code>Observed</code> does something the other two do not: it re-derives
+    those factors from the scan cache and refuses to continue if they disagree.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1000 244" role="img" aria-label="The drift guard: export_model_factors reduces the raw scans to a cache and writes the observed factor CSVs; at build time Observed loads those CSVs and separately re-runs the same derive and filter code against the cache, asserting the two agree.">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+
+        <text class="lbl-h" x="16" y="20">AHEAD OF THE BUILD — STEP 0, MINUTES</text>
+        <text class="lbl-h" x="16" y="152">AT BUILD TIME — SECONDS</text>
+
+        <rect class="s-node" x="16" y="34" width="150" height="56"></rect>
+        <text class="lbl" x="28" y="56">raw scan CSV</text>
+        <text class="lbl-s" x="28" y="76">2.96 M events</text>
+
+        <rect class="o-node" x="206" y="34" width="186" height="56"></rect>
+        <text class="lbl" x="218" y="56">export_model_factors</text>
+        <text class="lbl-s" x="218" y="76">reduce · derive · filter</text>
+
+        <rect class="o-node" x="432" y="34" width="186" height="56"></rect>
+        <text class="lbl" x="444" y="56">factors_observed/</text>
+        <text class="lbl-s" x="444" y="76">11 CSVs, committed</text>
+
+        <rect class="p-node" x="206" y="166" width="186" height="56"></rect>
+        <text class="lbl" x="218" y="188">consignment_paths.pkl</text>
+        <text class="lbl-s" x="218" y="208">the reduction, cached</text>
+
+        <rect class="o-node" x="432" y="166" width="186" height="56"></rect>
+        <text class="lbl" x="444" y="188">derive + filter again</text>
+        <text class="lbl-s" x="444" y="208">the exporter's own code</text>
+
+        <rect class="g-node" x="672" y="88" width="200" height="80"></rect>
+        <text class="lbl" x="684" y="112" font-weight="600">assert equal</text>
+        <text class="lbl-s" x="684" y="132">a stale or hand-edited</text>
+        <text class="lbl-s" x="684" y="148">export fails the build</text>
+
+        <path class="wire" d="M166,62 L200,62" marker-end="url(#ar2)"></path>
+        <path class="wire-o" d="M392,62 L426,62" marker-end="url(#ar2)"></path>
+        <path class="wire-o" d="M299,90 L299,160" marker-end="url(#ar2)"></path>
+        <text class="lbl-arr" x="308" y="130">writes the cache</text>
+        <path class="wire-o" d="M392,194 L426,194" marker-end="url(#ar2)"></path>
+        <path class="wire-g" d="M618,62 L645,62 L645,120 L666,120" marker-end="url(#ar2)"></path>
+        <path class="wire-g" d="M618,194 L645,194 L645,138 L666,138" marker-end="url(#ar2)"></path>
+        <text class="lbl-arr" x="884" y="124">→ Observed,</text>
+        <text class="lbl-arr" x="884" y="140">then Topology</text>
+      </svg>
+    </div>
+    <figcaption><b>The drift guard.</b> The CSVs are not trusted because they are committed — they
+    are trusted because the same code that wrote them is re-run against the cache and the answers
+    have to match. Where the scans do not live (a DataStar workspace) the guard skips and says so.</figcaption>
+  </figure>
+</section>
+
+<!-- ══ STEP 2 ═════════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><span class="step">PREPARE</span><h2>Prepare — the measured balance</h2></div>
+  <div class="prose">
+    <p>Two pieces of work that belong to no single table, so several tables can read them.
+    <code>load_source_data</code> brings in the day and the coordinates.
+    <code>measure_balance</code> does the arithmetic the whole entity rests on: the floored scan
+    joint applied to the model's own demand, per depot × class, integerised by largest remainder so
+    every row sums exactly to that depot's demand.</p>
+    <div class="eq">stage + interstate + Victoria same-day  =  D          per depot × class, exactly</div>
+    <p>There is no free parameter in that line — it balances by construction, which is why chain 2
+    needs no pickup machinery to close. What comes out of it is the three supplier families
+    (<code>SUP_STAGE_*</code>, <code>SUP_INT_*</code>, <code>SUP_VIC_*</code>), the cross-dock lanes
+    split out of the joint, and each depot's throughput cap.</p>
+  </div>
+</section>
+
+<!-- ══ STEP 3 ═════════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><span class="step">TABLES</span><h2>Tables — twenty modules, and the order is load-bearing</h2></div>
+  <div class="prose">
+    <p>One module per CSV, named for the CSV it writes, so <code>ls src/chain2/tables/</code> and
+    <code>ls</code> of the output folder match. They run in <code>ORDER</code>, and that order is
+    not alphabetical — a table is rarely computable from the inputs alone, so each module leaves
+    what a later one needs on the shared <code>Chain2Model</code> object.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 900 610" role="img" aria-label="The twenty table modules in run order, with arcs showing the eight dependencies between them: OriginMix into CustomerDemand, WorkCenters into Processes and FlowConstraints, Processes into ProductionPolicies, UserDefinedVariables into UserDefinedConstraints and Groups, and CustomerDemand and TransportationPolicies into FlowConstraints.">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+
+        <text class="lbl-h" x="16" y="20">FROM PREPARE</text>
+        <text class="lbl-h" x="212" y="20">RUN ORDER</text>
+        <text class="lbl-h" x="530" y="20">WHAT EACH ONE OWES THE NEXT</text>
+
+        <!-- prepare rail -->
+        <rect class="o-node" x="16" y="36" width="128" height="86"></rect>
+        <text class="lbl-s" x="28" y="56">MIX · D_pud_class</text>
+        <text class="lbl-s" x="28" y="73">STAGE_BY_PUD</text>
+        <text class="lbl-s" x="28" y="90">XDOCK_PAIR / _AT</text>
+        <text class="lbl-s" x="28" y="107">throughput caps</text>
+
+        <!-- 20 rows -->
+        <g>
+          <text class="lbl-s" x="196" y="51" text-anchor="end">1</text><rect class="p-node" x="204" y="38" width="232" height="20"></rect><text class="lbl" x="214" y="52">Facilities</text>
+          <text class="lbl-s" x="196" y="79" text-anchor="end">2</text><rect class="p-node" x="204" y="66" width="232" height="20"></rect><text class="lbl" x="214" y="80">Products</text>
+          <text class="lbl-s" x="196" y="107" text-anchor="end">3</text><rect class="p-node" x="204" y="94" width="232" height="20"></rect><text class="lbl" x="214" y="108">Customers</text>
+          <text class="lbl-s" x="196" y="135" text-anchor="end">4</text><rect class="o-node" x="204" y="122" width="232" height="20"></rect><text class="lbl" x="214" y="136">OriginMix</text>
+          <text class="lbl-s" x="196" y="163" text-anchor="end">5</text><rect class="o-node" x="204" y="150" width="232" height="20"></rect><text class="lbl" x="214" y="164">CustomerDemand</text>
+          <text class="lbl-s" x="196" y="191" text-anchor="end">6</text><rect class="p-node" x="204" y="178" width="232" height="20"></rect><text class="lbl" x="214" y="192">Suppliers</text>
+          <text class="lbl-s" x="196" y="219" text-anchor="end">7</text><rect class="o-node" x="204" y="206" width="232" height="20"></rect><text class="lbl" x="214" y="220">SupplierCapabilities</text>
+          <text class="lbl-s" x="196" y="247" text-anchor="end">8</text><rect class="p-node" x="204" y="234" width="232" height="20"></rect><text class="lbl" x="214" y="248">BillOfMaterials</text>
+          <text class="lbl-s" x="196" y="275" text-anchor="end">9</text><rect class="a-node" x="204" y="262" width="232" height="20"></rect><text class="lbl" x="214" y="276">WorkCenters</text>
+          <text class="lbl-s" x="196" y="303" text-anchor="end">10</text><rect class="p-node" x="204" y="290" width="232" height="20"></rect><text class="lbl" x="214" y="304">Processes</text>
+          <text class="lbl-s" x="196" y="331" text-anchor="end">11</text><rect class="p-node" x="204" y="318" width="232" height="20"></rect><text class="lbl" x="214" y="332">ProductionPolicies</text>
+          <text class="lbl-s" x="196" y="359" text-anchor="end">12</text><rect class="p-node" x="204" y="346" width="232" height="20"></rect><text class="lbl" x="214" y="360">ProcurementPolicies</text>
+          <text class="lbl-s" x="196" y="387" text-anchor="end">13</text><rect class="a-node" x="204" y="374" width="232" height="20"></rect><text class="lbl" x="214" y="388">TransportationPolicies</text>
+          <text class="lbl-s" x="196" y="415" text-anchor="end">14</text><rect class="a-node" x="204" y="402" width="232" height="20"></rect><text class="lbl" x="214" y="416">TransportationModes</text>
+          <text class="lbl-s" x="196" y="443" text-anchor="end">15</text><rect class="p-node" x="204" y="430" width="232" height="20"></rect><text class="lbl" x="214" y="444">CustomerFulfillmentPolicies</text>
+          <text class="lbl-s" x="196" y="471" text-anchor="end">16</text><rect class="p-node" x="204" y="458" width="232" height="20"></rect><text class="lbl" x="214" y="472">ReplenishmentPolicies</text>
+          <text class="lbl-s" x="196" y="499" text-anchor="end">17</text><rect class="a-node" x="204" y="486" width="232" height="20"></rect><text class="lbl" x="214" y="500">UserDefinedVariables</text>
+          <text class="lbl-s" x="196" y="527" text-anchor="end">18</text><rect class="p-node" x="204" y="514" width="232" height="20"></rect><text class="lbl" x="214" y="528">UserDefinedConstraints</text>
+          <text class="lbl-s" x="196" y="555" text-anchor="end">19</text><rect class="p-node" x="204" y="542" width="232" height="20"></rect><text class="lbl" x="214" y="556">Groups</text>
+          <text class="lbl-s" x="196" y="583" text-anchor="end">20</text><rect class="o-node" x="204" y="570" width="232" height="20"></rect><text class="lbl" x="214" y="584">FlowConstraints</text>
+        </g>
+
+        <!-- prepare feeds -->
+        <path class="wire-o" d="M144,48 L198,48" marker-end="url(#ar3)"></path>
+        <path class="wire-o" d="M144,79 L170,79 L170,132 L198,132" marker-end="url(#ar3)"></path>
+        <path class="wire-o" d="M144,90 L162,90 L162,160 L198,160" marker-end="url(#ar3)"></path>
+        <path class="wire-o" d="M144,101 L154,101 L154,216 L198,216" marker-end="url(#ar3)"></path>
+        <path class="wire-o" d="M144,112 L150,112 L150,272 L198,272" marker-end="url(#ar3)"></path>
+        <path class="wire-o" d="M144,120 L146,120 L146,580 L198,580" marker-end="url(#ar3)"></path>
+
+        <!-- dependency arcs on the right -->
+        <path class="wire-dep" d="M436,132 C486,132 486,160 442,160" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="496" y="150">the origin column space</text>
+
+        <path class="wire-dep" d="M436,272 C496,272 496,300 442,300" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="506" y="290">the machines it sized</text>
+
+        <path class="wire-dep" d="M436,300 C486,300 486,328 442,328" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="496" y="318">the processes</text>
+
+        <path class="wire-dep" d="M436,496 C486,496 486,524 442,524" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="496" y="514">the mix families</text>
+
+        <path class="wire-dep" d="M436,500 C526,500 526,552 442,552" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="536" y="536">the product groups</text>
+
+        <path class="wire-dep" d="M436,164 C696,180 696,560 442,574" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="706" y="358">the demand</text>
+
+        <path class="wire-dep" d="M436,388 C646,400 646,564 442,578" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="656" y="470">the lanes</text>
+
+        <path class="wire-dep" d="M436,278 C756,300 756,552 442,570" marker-end="url(#ar3)"></path>
+        <text class="lbl-arr" x="766" y="420">the round-2 divert cap</text>
+      </svg>
+    </div>
+    <figcaption><b>Why the order is not alphabetical.</b> Eight real dependencies. <b>OriginMix</b>
+    fixes the origin columns before <b>CustomerDemand</b> allocates into them; <b>WorkCenters</b>
+    sizes the machines <b>Processes</b> names; <b>UserDefinedVariables</b> computes the mix families
+    that <b>Groups</b> and <b>UserDefinedConstraints</b> carry — which is why Groups is written near
+    the end. <b>FlowConstraints</b> is last because it needs the lanes, the demand and the cap.</figcaption>
+  </figure>
+</section>
+
+<!-- ══ STEPS 4-5 ══════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><span class="step">CHECKS · OUTPUT</span><h2>Checks, then the folder</h2></div>
+  <div class="prose">
+    <p>The checks read the written CSVs back off disk — not the in-memory frames — and assert them
+    against the measurement. Supplier caps must equal the measured stage and Victoria totals to the
+    article; every depot's OriginMix stage share must match its measurement within half a point; and
+    a stage-4 check compares where the model despatches from against where the scans do. Then
+    <code>summarise</code> lists what was written and sweeps out retired tables, so a file from an
+    older build cannot ride along in the upload.</p>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Table</th><th>Chiefly driven by</th><th style="text-align:right">Rows</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="t">Facilities</td><td class="src">topology + throughput caps</td><td class="n">18</td></tr>
+        <tr><td class="t">Products</td><td class="src">topology + presentation dials</td><td class="n">142</td></tr>
+        <tr><td class="t">Customers</td><td class="src">delivery zones</td><td class="n">1,046</td></tr>
+        <tr><td class="t">OriginMix</td><td class="src">the measured balance</td><td class="n">11</td></tr>
+        <tr><td class="t">CustomerDemand</td><td class="src">demand table × origin mix</td><td class="n">13,044</td></tr>
+        <tr><td class="t">Suppliers</td><td class="src">the three supplier families</td><td class="n">27</td></tr>
+        <tr><td class="t">SupplierCapabilities</td><td class="src">measured stage / interstate / Victoria</td><td class="n">37</td></tr>
+        <tr><td class="t">BillOfMaterials</td><td class="src">sort-round and cross-dock recipes</td><td class="n">118</td></tr>
+        <tr><td class="t">WorkCenters</td><td class="src">machine rates, hours, dock sizing</td><td class="n">67</td></tr>
+        <tr><td class="t">Processes</td><td class="src">the work centres</td><td class="n">67</td></tr>
+        <tr><td class="t">ProductionPolicies</td><td class="src">the processes</td><td class="n">448</td></tr>
+        <tr><td class="t">ProcurementPolicies</td><td class="src">supplier presentation</td><td class="n">38</td></tr>
+        <tr><td class="t">TransportationPolicies</td><td class="src">the lane set × modes</td><td class="n">19,865</td></tr>
+        <tr><td class="t">TransportationModes</td><td class="src">transport_modes.csv</td><td class="n">6</td></tr>
+        <tr><td class="t">CustomerFulfillmentPolicies</td><td class="src">depot → zone assignment</td><td class="n">18,828</td></tr>
+        <tr><td class="t">ReplenishmentPolicies</td><td class="src">the inter-site lanes</td><td class="n">806</td></tr>
+        <tr><td class="t">UserDefinedVariables</td><td class="src">the unload / sort mix bounds</td><td class="n">52</td></tr>
+        <tr><td class="t">UserDefinedConstraints</td><td class="src">the variables above</td><td class="n">26</td></tr>
+        <tr><td class="t">Groups</td><td class="src">the mix product groups</td><td class="n">49</td></tr>
+        <tr><td class="t">FlowConstraints</td><td class="src">measured sort-round bands</td><td class="n">50</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <div class="kick">Row counts are from the last build</div>
+    <p>The figures above are the 17 August build. Chain 2 has not been re-run since the delivering-depot
+    and stage-rule changes of 18 August, so re-running it will move <code>OriginMix</code>,
+    <code>CustomerDemand</code> and the supplier capacities. The drift guard will insist on it: the
+    factor CSVs and the scan cache have both moved on.</p>
+  </div>
+</section>
+
+<!-- ══ RUNNING IT ═════════════════════════════════════════════════ -->
+<section>
+  <div class="sec-head"><h2>Two ways to run the same path</h2></div>
+  <div class="prose">
+    <p>The pipeline exists twice over. <code>build_chain2.py</code> is the flat, notebook-derived
+    script that <code>build_all.py</code> runs; <code>src/chain2/</code> is the same build as a
+    package, one module per table, driven by <code>python -m src chain2</code>. Both read the same
+    three folders and write the same twenty CSVs to the same place.</p>
+    <div class="eq">python -m src all --skip-export      # chain2 → chain1 → final</div>
+    <p>Step 0 is deliberately outside chain 2. It reads 2.96 M scan events and takes minutes where
+    chain 2 takes seconds, and the four filter dials are applied there, once — so chain 2 consumes
+    whatever it got and cannot quietly re-filter the measurement it is supposed to be reproducing.</p>
+  </div>
+</section>
+</div>
+
+<div class="chapter" id="s3">
+  <div class="part">
+    <div class="num">3</div>
+    <div class="txt">
+      <p class="script">src/chain1  ·  build_chain1.py</p>
+      <h2>The collection entity</h2>
+      <p>Pickup, round-0 sort and the two sinks — cut out of an older build, not re-derived.</p>
+    </div>
+  </div>
+<section>
+  <div class="sec-head"><h2>The extraction</h2></div>
+  <div class="prose">
+    <p>Chain 1 has no <code>Config</code> and reads no dials, because there is nothing here to
+    steer. Even the list of origin clusters is read off the source build's own suppliers rather
+    than hardcoded — so if that build is regenerated under different rules, chain 1 follows it
+    instead of drifting away from it.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1180 400" role="img" aria-label="Chain 1's extraction: the Change 27 build's Suppliers table yields seven origin cluster tags, which become the class-and-tag prefix selector; Products selects on it and defines the product set every other module tests against, producing seventeen tables.">
+        <defs>
+          <marker id="arC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="16" y="20">THE SOURCE BUILD</text>
+        <text class="lbl-h" x="336" y="20">THE SELECTOR, DERIVED FROM IT</text>
+        <text class="lbl-h" x="700" y="20">17 SELECTION RULES</text>
+        <text class="lbl-h" x="990" y="20">THE ENTITY</text>
+
+        <rect class="a-node" x="16" y="60" width="260" height="150"></rect>
+        <text class="lbl" x="30" y="84" font-weight="600">…chain2_scan_constrained/</text>
+        <text class="lbl-s" x="30" y="106">the Change 27 build — the last</text>
+        <text class="lbl-s" x="30" y="121">model with both chains together</text>
+        <text class="lbl-s" x="30" y="136">under the current pickup rules</text>
+        <line class="tick" x1="30" y1="150" x2="262" y2="150"></line>
+        <text class="lbl-s" x="30" y="170">18 CSV tables, read-only</text>
+        <text class="lbl-s" x="30" y="188">never created by this build</text>
+
+        <rect class="p-node" x="16" y="240" width="260" height="76"></rect>
+        <text class="lbl" x="30" y="262">Suppliers.csv</text>
+        <text class="lbl-s" x="30" y="282">SUP_PKP_* — the pickup</text>
+        <text class="lbl-s" x="30" y="298">suppliers name the clusters</text>
+
+        <rect class="o-node" x="336" y="180" width="290" height="136"></rect>
+        <text class="lbl" x="350" y="204" font-weight="600">7 origin clusters</text>
+        <text class="lbl-s" x="350" y="226">WEST · NORTH · INNER · SOUTH_EAST</text>
+        <text class="lbl-s" x="350" y="242">OUTER_EAST · DANDENONG · DANDENONG_TR</text>
+        <line class="tick" x1="350" y1="256" x2="612" y2="256"></line>
+        <text class="lbl-s" x="350" y="276">the family selector, 14 prefixes:</text>
+        <text class="lbl-s" x="350" y="296">EP_&lt;tag&gt;_ and PP_&lt;tag&gt;_</text>
+
+        <rect class="p-node" x="700" y="60" width="240" height="76"></rect>
+        <text class="lbl" x="714" y="82">Products</text>
+        <text class="lbl-s" x="714" y="102">selects on the prefixes and</text>
+        <text class="lbl-s" x="714" y="118">DEFINES the entity</text>
+
+        <rect class="p-node" x="700" y="152" width="240" height="76"></rect>
+        <text class="lbl" x="714" y="174">Customers</text>
+        <text class="lbl-s" x="714" y="194">the two sink families:</text>
+        <text class="lbl-s" x="714" y="210">CZ_Interstate_* · CZ_LocalTerm_*</text>
+
+        <rect class="p-node" x="700" y="244" width="240" height="90"></rect>
+        <text class="lbl" x="714" y="266">the other 15 rules</text>
+        <text class="lbl-s" x="714" y="286">each one answers only:</text>
+        <text class="lbl-s" x="714" y="302">"how is this table cut out</text>
+        <text class="lbl-s" x="714" y="318">of the source build?"</text>
+
+        <rect class="p-node" x="990" y="130" width="174" height="130"></rect>
+        <text class="lbl" x="1004" y="154" font-weight="600">…chain1/</text>
+        <text class="lbl-s" x="1004" y="176">17 CSV tables</text>
+        <text class="lbl-s" x="1004" y="192">82 products</text>
+        <text class="lbl-s" x="1004" y="208">411 suppliers</text>
+        <text class="lbl-s" x="1004" y="224">32 work centres</text>
+        <line class="tick" x1="1004" y1="238" x2="1150" y2="238"></line>
+        <text class="lbl-s" x="1004" y="256">unmodified assumptions</text>
+
+        <path class="wire-a" d="M276,278 L330,278" marker-end="url(#arC)"></path>
+        <path class="wire-o" d="M626,214 L664,214 L664,98 L694,98" marker-end="url(#arC)"></path>
+        <path class="wire-o" d="M626,248 L664,248 L664,190 L694,190" marker-end="url(#arC)"></path>
+        <path class="wire-o" d="M626,282 L694,282" marker-end="url(#arC)"></path>
+        <path class="wire-a" d="M276,135 L300,135 L300,40 L974,40 L974,170 L984,170" marker-end="url(#arC)"></path>
+        <text class="lbl-arr" x="640" y="34">every row is copied from these tables, never recomputed</text>
+        <path class="wire-o" d="M940,98 L962,98 L962,180 L984,180" marker-end="url(#arC)"></path>
+        <path class="wire-o" d="M940,190 L984,190" marker-end="url(#arC)"></path>
+        <path class="wire-o" d="M940,282 L962,282 L962,200 L984,200" marker-end="url(#arC)"></path>
+      </svg>
+    </div>
+    <figcaption><b>Selection, not derivation.</b> "Current assumptions" means exactly the
+    assumptions of the Change 27 build. If that build is regenerated with different dials, this
+    must be re-run after it — there is no other way for chain 1 to learn that they changed.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>The order, and what it encodes</h2></div>
+  <div class="prose">
+    <p>Seventeen modules, one per table, each holding a single selection rule. Four of them exist
+    before the others because their output is the test the others run.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 900 530" role="img" aria-label="Chain 1's seventeen modules in run order, with four dependencies: Products defines the product set every rule tests, ProductionPolicies names the processes, Customers defines the sink names, and Processes is cut before WorkCenters which derives from it.">
+        <defs>
+          <marker id="arD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="212" y="20">RUN ORDER</text>
+        <text class="lbl-h" x="520" y="20">WHAT IT LEAVES FOR THE REST</text>
+
+        <g>
+          <text class="lbl-s" x="196" y="49" text-anchor="end">1</text><rect class="o-node" x="204" y="36" width="228" height="20"></rect><text class="lbl" x="214" y="50">Products</text>
+          <text class="lbl-s" x="196" y="77" text-anchor="end">2</text><rect class="p-node" x="204" y="64" width="228" height="20"></rect><text class="lbl" x="214" y="78">BillOfMaterials</text>
+          <text class="lbl-s" x="196" y="105" text-anchor="end">3</text><rect class="o-node" x="204" y="92" width="228" height="20"></rect><text class="lbl" x="214" y="106">ProductionPolicies</text>
+          <text class="lbl-s" x="196" y="133" text-anchor="end">4</text><rect class="p-node" x="204" y="120" width="228" height="20"></rect><text class="lbl" x="214" y="134">Suppliers</text>
+          <text class="lbl-s" x="196" y="161" text-anchor="end">5</text><rect class="p-node" x="204" y="148" width="228" height="20"></rect><text class="lbl" x="214" y="162">SupplierCapabilities</text>
+          <text class="lbl-s" x="196" y="189" text-anchor="end">6</text><rect class="p-node" x="204" y="176" width="228" height="20"></rect><text class="lbl" x="214" y="190">ProcurementPolicies</text>
+          <text class="lbl-s" x="196" y="217" text-anchor="end">7</text><rect class="o-node" x="204" y="204" width="228" height="20"></rect><text class="lbl" x="214" y="218">Customers</text>
+          <text class="lbl-s" x="196" y="245" text-anchor="end">8</text><rect class="p-node" x="204" y="232" width="228" height="20"></rect><text class="lbl" x="214" y="246">CustomerDemand</text>
+          <text class="lbl-s" x="196" y="273" text-anchor="end">9</text><rect class="p-node" x="204" y="260" width="228" height="20"></rect><text class="lbl" x="214" y="274">CustomerFulfillmentPolicies</text>
+          <text class="lbl-s" x="196" y="301" text-anchor="end">10</text><rect class="p-node" x="204" y="288" width="228" height="20"></rect><text class="lbl" x="214" y="302">TransportationPolicies</text>
+          <text class="lbl-s" x="196" y="329" text-anchor="end">11</text><rect class="p-node" x="204" y="316" width="228" height="20"></rect><text class="lbl" x="214" y="330">TransportationModes</text>
+          <text class="lbl-s" x="196" y="357" text-anchor="end">12</text><rect class="p-node" x="204" y="344" width="228" height="20"></rect><text class="lbl" x="214" y="358">ReplenishmentPolicies</text>
+          <text class="lbl-s" x="196" y="385" text-anchor="end">13</text><rect class="p-node" x="204" y="372" width="228" height="20"></rect><text class="lbl" x="214" y="386">FlowConstraints</text>
+          <text class="lbl-s" x="196" y="413" text-anchor="end">14</text><rect class="p-node" x="204" y="400" width="228" height="20"></rect><text class="lbl" x="214" y="414">Groups</text>
+          <text class="lbl-s" x="196" y="441" text-anchor="end">15</text><rect class="p-node" x="204" y="428" width="228" height="20"></rect><text class="lbl" x="214" y="442">Facilities</text>
+          <text class="lbl-s" x="196" y="469" text-anchor="end">16</text><rect class="o-node" x="204" y="456" width="228" height="20"></rect><text class="lbl" x="214" y="470">Processes</text>
+          <text class="lbl-s" x="196" y="497" text-anchor="end">17</text><rect class="p-node" x="204" y="484" width="228" height="20"></rect><text class="lbl" x="214" y="498">WorkCenters</text>
+        </g>
+
+        <path class="wire-dep" d="M432,46 C660,60 660,470 438,494" marker-end="url(#arD)"></path>
+        <text class="lbl-arr" x="670" y="240">the product set every rule tests</text>
+
+        <path class="wire-dep" d="M432,102 C516,102 516,462 438,466" marker-end="url(#arD)"></path>
+        <text class="lbl-arr" x="526" y="286">it names the processes</text>
+
+        <path class="wire-dep" d="M432,466 C486,466 486,494 438,494" marker-end="url(#arD)"></path>
+        <text class="lbl-arr" x="496" y="484">WorkCenters is cut from it</text>
+
+        <path class="wire-dep" d="M432,214 C482,214 482,242 438,242" marker-end="url(#arD)"></path>
+        <text class="lbl-arr" x="492" y="232">the sink names</text>
+      </svg>
+    </div>
+    <figcaption><b>Four dependencies, no more.</b> <b>Products</b> defines the entity — every other
+    rule is "the rows whose product is in that set". <b>ProductionPolicies</b> names the processes,
+    which name the work centres; <b>WorkCenters</b> is therefore cut from <b>Processes</b>, not from
+    the source table.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>The balance, and what it is not</h2></div>
+  <div class="prose">
+    <p>Everything collected either leaves the state after one hub sort, or is kept on site for
+    tomorrow. There is no third destination — nothing lodged in Melbourne is delivered in Melbourne
+    today, and that is structural in the recipe table rather than enforced by the check.</p>
+    <div class="eq">P 46,199  =  OUT 41,857 (CZ_Interstate_*)  +  L 4,342 (CZ_LocalTerm_*)</div>
+    <p>The assert is an arithmetic check that the extraction did not lose a family. If the source
+    build's pickup rules move, the sum stops closing and the build fails rather than shipping a
+    broken entity.</p>
+  </div>
+  <div class="note">
+    <div class="kick">Open here, and only here</div>
+    <p><code>LOCAL_KEEP_BY_PUD</code> sets the Sort0 terminate, and the pickup despatch split stays
+    pinned to its pre-Change-26 values — because the scan extract is <b>delivery-side</b> and says
+    nothing about despatch. The lodgement-side extract, the same query selected on lodgement
+    facility, is what would turn these assumptions into measurements. Chain 2's measured Victoria
+    same-day volume is the nearest evidence available in the meantime.</p>
+  </div>
+</section>
+</div>
+
+<div class="chapter" id="s4">
+  <div class="part">
+    <div class="num">4</div>
+    <div class="txt">
+      <p class="script">src/final  ·  build_final.py</p>
+      <h2>The combined model</h2>
+      <p>Both entities read back off disk and merged into the folder you upload.</p>
+    </div>
+  </div>
+<section>
+  <div class="sec-head"><h2>The combine</h2></div>
+  <div class="prose">
+    <p>It reads from disk rather than taking the two models in memory, and that is what makes the
+    run order a real dependency: chain 2 and chain 1 must both have been built before this runs.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 1180 420" role="img" aria-label="The final merge: chain one's folder and chain two's folder are read off disk, twenty modules apply one of four merge rules each, retired tables are swept out, and the balance report prints the two independent ledgers.">
+        <defs>
+          <marker id="arE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <text class="lbl-h" x="16" y="20">READ OFF DISK</text>
+        <text class="lbl-h" x="380" y="20">ONE RULE PER TABLE</text>
+        <text class="lbl-h" x="780" y="20">SWEEP · REPORT</text>
+        <text class="lbl-h" x="1000" y="20">UPLOAD THIS</text>
+
+        <rect class="a-node" x="16" y="60" width="250" height="112"></rect>
+        <text class="lbl" x="30" y="84" font-weight="600">…chain1/</text>
+        <text class="lbl-s" x="30" y="106">pickup → sortation → terminate</text>
+        <text class="lbl-s" x="30" y="122">17 tables · current assumptions</text>
+        <line class="tick" x1="30" y1="136" x2="252" y2="136"></line>
+        <text class="lbl-s" x="30" y="156">P = OUT + L</text>
+
+        <rect class="o-node" x="16" y="196" width="250" height="112"></rect>
+        <text class="lbl" x="30" y="220" font-weight="600">…chain2_observed/</text>
+        <text class="lbl-s" x="30" y="242">sources → sort → delivery</text>
+        <text class="lbl-s" x="30" y="258">20 tables · measured</text>
+        <line class="tick" x1="30" y1="272" x2="252" y2="272"></line>
+        <text class="lbl-s" x="30" y="292">D = stage + VIC + interstate</text>
+
+        <rect class="p-node" x="380" y="46" width="286" height="58"></rect>
+        <text class="lbl" x="394" y="68">concat_disjoint · 3 tables</text>
+        <text class="lbl-s" x="394" y="88">Products · Suppliers · Customers — overlap asserts</text>
+
+        <rect class="p-node" x="380" y="118" width="286" height="58"></rect>
+        <text class="lbl" x="394" y="140">concat_dedupe · 10 tables</text>
+        <text class="lbl-s" x="394" y="160">the same fact stated twice is one fact</text>
+
+        <rect class="p-node" x="380" y="190" width="286" height="58"></rect>
+        <text class="lbl" x="394" y="212">carry from chain 2 · 3 tables</text>
+        <text class="lbl-s" x="394" y="232">OriginMix and the two mix tables</text>
+
+        <rect class="g-node" x="380" y="262" width="286" height="82"></rect>
+        <text class="lbl" x="394" y="284">custom · 4 tables</text>
+        <text class="lbl-s" x="394" y="304">Facilities (containment) · TransportationModes</text>
+        <text class="lbl-s" x="394" y="320">(identity) · WorkCenters (SUMS) · Processes</text>
+        <text class="lbl-s" x="394" y="336">(re-rated from the merged capacities)</text>
+
+        <rect class="g-node" x="780" y="120" width="180" height="164"></rect>
+        <text class="lbl" x="794" y="144">sweep_retired</text>
+        <text class="lbl-s" x="794" y="164">a table from an older</text>
+        <text class="lbl-s" x="794" y="180">build cannot ride along</text>
+        <line class="tick" x1="794" y1="196" x2="946" y2="196"></line>
+        <text class="lbl" x="794" y="218">balance.report</text>
+        <text class="lbl-s" x="794" y="238">prints the two ledgers</text>
+        <text class="lbl-s" x="794" y="254">and the base scale</text>
+        <text class="lbl-s" x="794" y="272">then asserts the schema</text>
+
+        <rect class="p-node" x="1000" y="150" width="164" height="104"></rect>
+        <text class="lbl" x="1014" y="174" font-weight="600">…final/</text>
+        <text class="lbl-s" x="1014" y="196">20 CSV tables</text>
+        <text class="lbl-s" x="1014" y="212">224 products</text>
+        <text class="lbl-s" x="1014" y="228">20,784 lanes</text>
+        <text class="lbl-s" x="1014" y="244">70 work centres</text>
+
+        <path class="wire-a" d="M266,116 L330,116 L330,75 L374,75" marker-end="url(#arE)"></path>
+        <path class="wire-a" d="M266,126 L340,126 L340,147 L374,147" marker-end="url(#arE)"></path>
+        <path class="wire-a" d="M266,136 L350,136 L350,303 L374,303" marker-end="url(#arE)"></path>
+        <path class="wire-o" d="M266,232 L330,232 L330,219 L374,219" marker-end="url(#arE)"></path>
+        <path class="wire-o" d="M266,242 L340,242 L340,157 L374,157" marker-end="url(#arE)"></path>
+        <path class="wire-o" d="M266,252 L350,252 L350,313 L374,313" marker-end="url(#arE)"></path>
+        <path class="wire-o" d="M266,262 L360,262 L360,85 L374,85" marker-end="url(#arE)"></path>
+        <path class="wire-g" d="M666,195 L774,195" marker-end="url(#arE)"></path>
+        <path class="wire-g" d="M960,202 L994,202" marker-end="url(#arE)"></path>
+      </svg>
+    </div>
+    <figcaption><b>Which rule a table gets is a statement about what that table means.</b> Disjoint
+    says the two entities partition the key and an overlap would be double-counting. Dedupe says
+    they may state the same fact. Carry says the table belongs to one entity only.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>The one real merge</h2></div>
+  <div class="prose">
+    <p>Everywhere else the entities are kept apart. Here they cannot be: the same machine at a
+    shared site serves both chains, and each entity sized it for <b>its own touches only</b> —
+    chain 1 for the pickup it despatches, chain 2 for the arrivals it sorts.</p>
+  </div>
+  <figure>
+    <div class="figbody">
+      <svg viewBox="0 0 940 320" role="img" aria-label="The WorkCenters merge: rows identical in both entities collapse to one, while rows whose capacity differs are summed, and Processes then takes its processing rate from the merged frame.">
+        <defs>
+          <marker id="arF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+            <path d="M0,1 L9,5 L0,9 z" fill="context-stroke"></path>
+          </marker>
+        </defs>
+        <rect class="a-node" x="16" y="60" width="230" height="86"></rect>
+        <text class="lbl" x="30" y="84" font-weight="600">chain 1's WorkCenters</text>
+        <text class="lbl-s" x="30" y="106">32 rows — sized for the</text>
+        <text class="lbl-s" x="30" y="122">pickup it despatches</text>
+
+        <rect class="o-node" x="16" y="176" width="230" height="86"></rect>
+        <text class="lbl" x="30" y="200" font-weight="600">chain 2's WorkCenters</text>
+        <text class="lbl-s" x="30" y="222">67 rows — sized for the</text>
+        <text class="lbl-s" x="30" y="238">arrivals it sorts</text>
+
+        <rect class="p-node" x="330" y="52" width="270" height="76"></rect>
+        <text class="lbl" x="344" y="76">identical rows</text>
+        <text class="lbl-s" x="344" y="96">collapse to one — a machine is</text>
+        <text class="lbl-s" x="344" y="112">not doubled by being used twice</text>
+
+        <rect class="g-node" x="330" y="150" width="270" height="94"></rect>
+        <text class="lbl" x="344" y="174">differing capacities are SUMMED</text>
+        <text class="lbl-s" x="344" y="194">the workload-scaled docks. The</text>
+        <text class="lbl-s" x="344" y="210">combined building carries both,</text>
+        <text class="lbl-s" x="344" y="226">so its capacity is the sum</text>
+        <text class="lbl-s" x="344" y="240">— printed by name and by its two parts</text>
+
+        <rect class="p-node" x="672" y="76" width="252" height="72"></rect>
+        <text class="lbl" x="686" y="100" font-weight="600">70 work centres</text>
+        <text class="lbl-s" x="686" y="122">the merged frame</text>
+        <text class="lbl-s" x="686" y="138">— not either entity's</text>
+
+        <rect class="g-node" x="672" y="176" width="252" height="86"></rect>
+        <text class="lbl" x="686" y="200">Processes, re-rated</text>
+        <text class="lbl-s" x="686" y="220">a rate is its machine's capacity,</text>
+        <text class="lbl-s" x="686" y="236">so carrying either entity's would</text>
+        <text class="lbl-s" x="686" y="252">run a merged dock at half speed</text>
+
+        <path class="wire-a" d="M246,96 L324,90" marker-end="url(#arF)"></path>
+        <path class="wire-a" d="M246,110 L300,110 L300,186 L324,186" marker-end="url(#arF)"></path>
+        <path class="wire-o" d="M246,206 L300,206 L300,196 L324,196" marker-end="url(#arF)"></path>
+        <path class="wire-o" d="M246,192 L290,192 L290,106 L324,106" marker-end="url(#arF)"></path>
+        <path class="wire-o" d="M600,90 L636,90 L636,106 L666,106" marker-end="url(#arF)"></path>
+        <path class="wire-g" d="M600,196 L636,196 L636,120 L666,120" marker-end="url(#arF)"></path>
+        <path class="wire-g" d="M798,148 L798,170" marker-end="url(#arF)"></path>
+      </svg>
+    </div>
+    <figcaption><b>WorkCenters, then Processes.</b> This is the only place in the whole pipeline
+    where a number appears that neither entity computed. That is exactly why the summed rows are
+    printed by name with both their parts — a dock capacity from nowhere is the kind of number
+    nobody can later explain.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Every table, and the rule it takes</h2></div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Table</th><th>Rule</th><th>Why that rule</th><th style="text-align:right">Rows</th></tr></thead>
+      <tbody>
+        <tr><td class="t">Facilities</td><td class="t">custom</td><td class="src">chain 2's copy — it carries the arrival-sized caps; containment guard</td><td class="n">18</td></tr>
+        <tr><td class="t">TransportationModes</td><td class="t">custom</td><td class="src">one copy, after an identity assert — the fleet is network identity</td><td class="n">6</td></tr>
+        <tr><td class="t">Products</td><td class="t">disjoint</td><td class="src">the entities partition the product space</td><td class="n">224</td></tr>
+        <tr><td class="t">Suppliers</td><td class="t">disjoint</td><td class="src">pickup suppliers vs the three delivery families</td><td class="n">438</td></tr>
+        <tr><td class="t">Customers</td><td class="t">disjoint</td><td class="src">two sinks vs the delivery zones</td><td class="n">1,053</td></tr>
+        <tr><td class="t">BillOfMaterials</td><td class="t">dedupe</td><td class="src">shared recipes stated once</td><td class="n">200</td></tr>
+        <tr><td class="t">SupplierCapabilities</td><td class="t">dedupe</td><td class="src">—</td><td class="n">859</td></tr>
+        <tr><td class="t">ProcurementPolicies</td><td class="t">dedupe</td><td class="src">—</td><td class="n">860</td></tr>
+        <tr><td class="t">CustomerDemand</td><td class="t">dedupe</td><td class="src">—</td><td class="n">13,071</td></tr>
+        <tr><td class="t">CustomerFulfillmentPolicies</td><td class="t">dedupe</td><td class="src">—</td><td class="n">18,862</td></tr>
+        <tr><td class="t">ReplenishmentPolicies</td><td class="t">dedupe</td><td class="src">—</td><td class="n">827</td></tr>
+        <tr><td class="t">TransportationPolicies</td><td class="t">dedupe</td><td class="src">—</td><td class="n">20,784</td></tr>
+        <tr><td class="t">FlowConstraints</td><td class="t">dedupe</td><td class="src">—</td><td class="n">64</td></tr>
+        <tr><td class="t">ProductionPolicies</td><td class="t">dedupe</td><td class="src">—</td><td class="n">705</td></tr>
+        <tr><td class="t">Groups</td><td class="t">dedupe</td><td class="src">a facility group named twice is one group</td><td class="n">467</td></tr>
+        <tr><td class="t">OriginMix</td><td class="t">carry</td><td class="src">delivery only — chain 1 has no origin mix</td><td class="n">11</td></tr>
+        <tr><td class="t">UserDefinedVariables</td><td class="t">carry</td><td class="src">removed if chain 2 did not build it this run</td><td class="n">52</td></tr>
+        <tr><td class="t">UserDefinedConstraints</td><td class="t">carry</td><td class="src">its pair — a variable with no constraint binds nothing</td><td class="n">26</td></tr>
+        <tr><td class="t">WorkCenters</td><td class="t">custom</td><td class="src">the one real merge — differing capacities are summed</td><td class="n">70</td></tr>
+        <tr><td class="t">Processes</td><td class="t">custom</td><td class="src">re-rated from the merged capacities, so it runs last</td><td class="n">70</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><h2>Two ledgers, not one identity</h2></div>
+  <div class="prose">
+    <p>There is no combined balance to check, and that is a finding rather than an omission.
+    Collection and delivery are independent daily activities, so the model carries two ledgers:</p>
+    <div class="eq">chain 1 (assumed)   P 46,199 = OUT 41,857 + L 4,342
+chain 2 (measured)  D 167,431 = stage 37,002 + VIC 77,939 + interstate 52,490</div>
+    <p>What the measurement does offer the assumption is an inference: the <b>77,939 EA lodged in
+    Victoria and delivered the same day</b> is delivery-side evidence about the size of the
+    collection activity chain 1 models with an assumed P of 46,199. That is the number to revisit
+    <code>PICKUP_TOTAL</code> with when the lodgement-side extract lands.</p>
+  </div>
+  <div class="note">
+    <div class="kick">The one thing that is not independent</div>
+    <p>The base. If the two entities count different days, any figure that adds a chain-1 number to
+    a chain-2 number is mixing bases — so the build prints the scale factor rather than letting the
+    mixing pass unremarked. On the last build both sat on the zone table's 167,431 EA and the
+    factor was 1.0000. Chain 2's rebuild on the 18 August rules moves it to 166,849 EA, so expect
+    a scale of 0.9965 until the chain-1 source build is rebased too.</p>
+  </div>
+</section>
+</div>
+
+</main>
+
+<footer>
+  <p>Drawn from <code>build_all.py</code> and the four builds it runs — <code>export_model_factors.py</code>,
+  <code>src/chain2/</code>, <code>src/chain1/</code> and <code>src/final/</code>. Figures for step 1
+  reflect the 18 August 2026 rebuild; row counts for steps 2 to 4 are from the 17 August build and
+  will move when the pipeline is re-run end to end.</p>
+</footer>
+
+</div>
+
+</body>
+</html>

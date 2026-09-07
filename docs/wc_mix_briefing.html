@@ -1,0 +1,266 @@
+<title>Work-centre flow allocation — what changed and what it gave us</title>
+<style>
+  :root {
+    --ground:#FBFCFD; --panel:#F2F5F8; --panel-2:#FFFFFF;
+    --ink:#16222E; --body:#3A4A5A; --muted:#6B7682; --rule:#D5DDE4;
+    --navy:#0F2E4E; --teal:#1F8A8C; --amber:#C87A1E; --brick:#A8402F;
+    --teal-wash:#EAF3F3; --amber-wash:#FAF2E7; --brick-wash:#F8ECEA;
+    --code-bg:#EEF2F6;
+    --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0B141D; --panel:#111E29; --panel-2:#0F1B25;
+      --ink:#E4EBF1; --body:#B4C2CE; --muted:#7C8B99; --rule:#22323F;
+      --navy:#9FC5C6; --teal:#4FB3B4; --amber:#DCA05A; --brick:#D46B58;
+      --teal-wash:#0F262B; --amber-wash:#241B10; --brick-wash:#251512;
+      --code-bg:#16242F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0B141D; --panel:#111E29; --panel-2:#0F1B25;
+    --ink:#E4EBF1; --body:#B4C2CE; --muted:#7C8B99; --rule:#22323F;
+    --navy:#9FC5C6; --teal:#4FB3B4; --amber:#DCA05A; --brick:#D46B58;
+    --teal-wash:#0F262B; --amber-wash:#241B10; --brick-wash:#251512;
+    --code-bg:#16242F;
+  }
+
+  body { background:var(--ground); color:var(--body); font-family:var(--sans);
+         font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1000px; margin:0 auto; padding:52px 28px 90px; display:flex; flex-direction:column; gap:40px; }
+
+  h1,h2,h3 { color:var(--ink); text-wrap:balance; font-weight:600; }
+  h1 { font-family:var(--display); font-size:2.25rem; line-height:1.15; letter-spacing:-0.01em; }
+  h2 { font-family:var(--display); font-size:1.5rem; line-height:1.25; }
+  h3 { font-size:0.98rem; }
+  p { margin:0; max-width:74ch; }
+
+  .eyebrow { font-size:0.72rem; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--teal); }
+  .deck { font-family:var(--display); font-size:1.14rem; line-height:1.5; max-width:70ch; }
+  .meta { font-size:0.84rem; color:var(--muted); font-family:var(--mono); }
+  header.top { display:flex; flex-direction:column; gap:13px; border-bottom:2px solid var(--navy); padding-bottom:24px; }
+
+  section { display:flex; flex-direction:column; gap:18px; }
+  .sec-head { display:flex; flex-direction:column; gap:5px; border-top:1px solid var(--rule); padding-top:24px; }
+  .num { font-family:var(--display); font-size:0.9rem; color:var(--muted); }
+
+  ul { margin:0; padding-left:1.15em; display:flex; flex-direction:column; gap:9px; max-width:76ch; }
+  ul ul { margin-top:8px; padding-left:1.1em; }
+  li::marker { color:var(--teal); }
+  li strong { color:var(--ink); }
+
+  code { font-family:var(--mono); font-size:0.85em; background:var(--code-bg);
+         padding:0.1em 0.35em; border-radius:3px; color:var(--ink); }
+
+  .callout { background:var(--panel); border-left:3px solid var(--teal); padding:15px 19px;
+             display:flex; flex-direction:column; gap:7px; }
+  .callout.q { border-left-color:var(--amber); background:var(--amber-wash); }
+  .callout.bad { border-left-color:var(--brick); background:var(--brick-wash); }
+  .callout .lab { font-size:0.69rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal); }
+  .callout.q .lab { color:var(--amber); }
+  .callout.bad .lab { color:var(--brick); }
+  .callout ul { max-width:none; }
+
+  .tablewrap { overflow-x:auto; border:1px solid var(--rule); background:var(--panel-2); }
+  table { border-collapse:collapse; width:100%; font-size:0.86rem; font-variant-numeric:tabular-nums; }
+  caption { text-align:left; font-size:0.7rem; letter-spacing:0.1em; text-transform:uppercase;
+            color:var(--muted); font-weight:700; padding:12px 14px 0; }
+  th { text-align:left; font-size:0.67rem; letter-spacing:0.09em; text-transform:uppercase; color:var(--muted);
+       font-weight:700; padding:10px 14px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  td { padding:9px 14px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  td.n, th.n { text-align:right; }
+  td strong { color:var(--ink); }
+  tr.total td { border-top:2px solid var(--rule); font-weight:600; color:var(--ink); }
+  .up { color:var(--brick); font-weight:600; }
+  .good { color:var(--teal); font-weight:600; }
+
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:1px;
+           background:var(--rule); border:1px solid var(--rule); }
+  .card { background:var(--panel-2); padding:16px 18px; display:flex; flex-direction:column; gap:5px; }
+  .card .k { font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+  .card .v { font-family:var(--display); font-size:1.55rem; color:var(--ink); line-height:1.1; }
+  .card .s { font-size:0.79rem; color:var(--muted); }
+
+  footer { border-top:1px solid var(--rule); padding-top:20px; font-size:0.81rem; color:var(--muted); max-width:74ch; }
+  ::selection { background:var(--teal); color:#fff; }
+  :focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+  @media (max-width:700px) { h1 { font-size:1.8rem; } }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">Optilogic cadence · Question 2 · Change 33</div>
+  <h1>Work-centre flow allocation</h1>
+  <p class="deck">How much volume goes through ULD versus long reach — and why, until now, the model could not answer that question with a number anyone had chosen.</p>
+  <p class="meta">Melbourne catchment · chain 2 · built and solved 13 Aug 2026</p>
+</header>
+
+<div class="cards">
+  <div class="card"><span class="k">Hand unload, before</span><span class="v">0 EA/day</span><span class="s">the model booked no hand-unload labour at all</span></div>
+  <div class="card"><span class="k">Hand unload, now</span><span class="v good">7,794 EA/day</span><span class="s">held at the 10% floor we set</span></div>
+  <div class="card"><span class="k">Volume moved off ULD</span><span class="v">26,165 EA/day</span><span class="s">onto long reach and hand</span></div>
+  <div class="card"><span class="k">Cost of the mix</span><span class="v up">+$92k/yr</span><span class="s">labour we were not counting</span></div>
+</div>
+
+<!-- 1 ─────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head">
+    <div class="num">01</div>
+    <h2>What we were doing before</h2>
+  </div>
+  <ul>
+    <li><strong>The mix was never stated anywhere.</strong> Three separate mechanisms decided it, and none of them was a percentage anyone had signed off.</li>
+    <li><strong>Which machines a parcel was allowed to use was hard-coded</strong> in the notebook — interstate freight could only go ULD or long reach, Victorian freight only ULD or hand. A real operational claim, buried in an <code>if</code> statement.</li>
+    <li><strong>The interstate 60/40 was enforced by cloning the product.</strong> We split the arrival into <code>..._ULD_Pickup</code> and <code>..._LR_Pickup</code>, gave each 60% and 40% of supply, and gave each exactly one recipe. Exact — but it took two products to express one ratio, and only worked at the point of arrival.</li>
+    <li><strong>Everywhere else, cost decided.</strong> ULD is $0.015/EA, long reach $0.020, hand $0.050. The cheapest machine filled first, so the mix we reported was a by-product of how we had sized the docks.</li>
+    <li><strong>The consequence: hand unload came out at exactly zero.</strong> The most expensive activity per parcel, and the model booked none of it.</li>
+    <li><strong>We knew this and had documented it as unfixable.</strong> The notebook carried a <code>bounded</code> setting that deliberately refused to run, with a note explaining that a work-centre capacity limit bounds the whole machine — and a hub's ULD dock is shared with collection and second-sort volume, so there was no way to bound just the interstate slice.</li>
+  </ul>
+</section>
+
+<!-- 2 ─────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head">
+    <div class="num">02</div>
+    <h2>What Optilogic suggested</h2>
+  </div>
+  <ul>
+    <li><strong>Two tables we were not using:</strong> <code>UserDefinedVariables</code> and <code>UserDefinedConstraints</code>, demonstrated in their <em>AusPost — Sort ByPass v2</em> model.</li>
+    <li><strong>A "variable" is really an expression.</strong> Each row is one term: a filter over quantities the model already produces, plus a coefficient. Rows sharing a name add together.</li>
+    <li><strong>Their worked example</strong> — long reach forced to half of all unloading at a hub:
+      <ul>
+        <li>term 1: total unloading across both methods, coefficient −0.5</li>
+        <li>term 2: long-reach unloading only, coefficient +1</li>
+        <li>constraint: the sum is fixed at 0 → long reach = 50% of the total</li>
+      </ul>
+    </li>
+    <li><strong>The percentage lives in the coefficient</strong>, not in the constraint value — so the ratio holds against a total the solver is free to change.</li>
+    <li><strong>Their framing:</strong> percentages become scenario items or pre-calculated columns, so testing a different mix is a switch rather than a rebuild.</li>
+  </ul>
+</section>
+
+<!-- 3 ─────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head">
+    <div class="num">03</div>
+    <h2>How we implemented it</h2>
+  </div>
+  <ul>
+    <li><strong>The insight that unlocked it:</strong> a user-defined variable filters by <em>product</em> and <em>process</em> at the same time. A work-centre capacity limit cannot. That is exactly what lets us bound the interstate share of a dock that also handles collection and second-sort volume — so the setting we had written off as impossible became buildable.</li>
+    <li><strong>The shares now live in a file anyone can read</strong> — <code>inputs/factors_assumed/unload_mix.csv</code> — one row per family per method, marked as placeholders until Operations confirm them.</li>
+    <li><strong>We set a band, not a fixed number.</strong> A hard equality goes infeasible the moment a machine runs short; a band lets the mix flex and shows us which way it wants to move. Each band is two constraints — a floor and a ceiling.</li>
+    <li><strong>We never constrain every method.</strong> Two methods that must add to 100%, plus the model's own flow balance, is one equation too many — any rounding makes it unsolvable with no useful error. One method per family is always left as the remainder.</li>
+    <li><strong>The cloned products are gone.</strong> Four interstate arrival products collapse back to two, and the 60/40 moves out of the supply table into the constraint. This is the "hard-coded product split" we were asked to remove.</li>
+    <li><strong>Off by default.</strong> With the switch off the model rebuilds byte-for-byte identical to before — verified by a full on-and-off round trip — so nothing changes until someone deliberately turns it on.</li>
+  </ul>
+
+  <div class="callout q">
+    <span class="lab">Two mistakes found on the way — worth knowing, because both were silent</span>
+    <ul>
+      <li><strong>The first upload looked like it worked and did nothing.</strong> We had named each constraint after the variable it bounds. Cosmic Frog keeps both names in one namespace, so all 26 constraints were dropped during pre-processing. The variables still calculated, the solve returned clean — and the mix was completely unbounded. Optilogic's NEO assistant found it in the validation report. Fixed by prefixing the names, plus a check in our build that now fails loudly if it ever recurs.</li>
+      <li><strong>Our own capacity check was measuring the wrong thing</strong> — the sorting workload rather than the unloading workload, which differ wherever freight is cross-docked. It understated Melbourne Parcel by 44%. Corrected, and the figures now reconcile exactly to the solve.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 4 ─────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head">
+    <div class="num">04</div>
+    <h2>Results</h2>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <caption>The mix, before and after — share of each family's unloading</caption>
+    <thead><tr><th>Family</th><th class="n">Volume EA/day</th><th class="n">ULD before</th><th class="n">ULD after</th><th class="n">Long reach after</th><th class="n">Hand after</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Interstate arrivals</strong></td><td class="n">52,490</td><td class="n">100%</td><td class="n"><strong>65.0%</strong></td><td class="n" ><strong>35.0%</strong></td><td class="n">—</td></tr>
+      <tr><td><strong>Victoria same-day</strong></td><td class="n">77,939</td><td class="n">100%</td><td class="n"><strong>90.0%</strong></td><td class="n">—</td><td class="n"><strong>10.0%</strong></td></tr>
+      <tr><td>Collection (chain 1)</td><td class="n">41,857</td><td class="n">100%</td><td class="n">100%</td><td class="n">—</td><td class="n">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="meta">Collection is not bounded yet — the change covers chain 2 only.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>What that moved</caption>
+    <thead><tr><th>Dock</th><th class="n">Before</th><th class="n">After</th><th class="n">Change</th></tr></thead>
+    <tbody>
+      <tr><td>Long reach</td><td class="n">0</td><td class="n">18,372</td><td class="n good">+18,372</td></tr>
+      <tr><td>Hand</td><td class="n">0</td><td class="n">7,794</td><td class="n good">+7,794</td></tr>
+      <tr class="total"><td>total off ULD</td><td class="n">0</td><td class="n">26,165</td><td class="n">EA/day</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Cost — the labour we were not counting</caption>
+    <thead><tr><th>Unload handling, bounded families</th><th class="n">$/day</th><th class="n">$/year</th></tr></thead>
+    <tbody>
+      <tr><td>If everything goes ULD (what the model used to say)</td><td class="n">1,956</td><td class="n">493,000</td></tr>
+      <tr><td>With the mix enforced</td><td class="n">2,321</td><td class="n">585,000</td></tr>
+      <tr class="total"><td>cost of the mix</td><td class="n up">+365</td><td class="n up">+91,890</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="meta">Cost rises because volume is forced off the cheapest machine. That is the correct direction — it is work the operation does and the model was not charging for.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Model size — smaller everywhere except the two new tables</caption>
+    <thead><tr><th>Table</th><th class="n">Before</th><th class="n">After</th><th class="n">Change</th></tr></thead>
+    <tbody>
+      <tr><td>Products</td><td class="n">226</td><td class="n">224</td><td class="n">−2</td></tr>
+      <tr><td>SupplierCapabilities</td><td class="n">865</td><td class="n">859</td><td class="n">−6</td></tr>
+      <tr><td>ProcurementPolicies</td><td class="n">866</td><td class="n">860</td><td class="n">−6</td></tr>
+      <tr><td>TransportationPolicies</td><td class="n">20,790</td><td class="n">20,784</td><td class="n">−6</td></tr>
+      <tr><td>Groups</td><td class="n">463</td><td class="n">467</td><td class="n">+4</td></tr>
+      <tr><td><strong>UserDefinedVariables</strong></td><td class="n">—</td><td class="n">52</td><td class="n">new</td></tr>
+      <tr><td><strong>UserDefinedConstraints</strong></td><td class="n">—</td><td class="n">26</td><td class="n">new</td></tr>
+      <tr class="total"><td>all 21 tables</td><td class="n">58,615</td><td class="n">58,677</td><td class="n">+62</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Verification against the solved run</caption>
+    <thead><tr><th>Check</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>Every constraint enforced</td><td><span class="good">13 of 13</span> upper bounds binding exactly at their cap</td></tr>
+      <tr><td>Every floor respected</td><td><span class="good">13 of 13</span> lower bounds satisfied</td></tr>
+      <tr><td>Terms reconcile to the solve</td><td><span class="good">52 of 52</span> reproduce exactly from the process output</td></tr>
+      <tr><td>Coefficients applied correctly</td><td><span class="good">all</span> — −0.55 / −0.65 / −0.80 / −0.90 / +1.00</td></tr>
+      <tr><td>Filters resolve to real records</td><td><span class="good">no</span> broken facility, process, product or group references</td></tr>
+      <tr><td>Turning it off is safe</td><td><span class="good">byte-identical</span> rebuild, verified round trip</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- 5 ─────────────────────────────────────────────── -->
+<section>
+  <div class="sec-head">
+    <div class="num">05</div>
+    <h2>What to decide next</h2>
+  </div>
+  <ul>
+    <li><strong>The numbers in the file are placeholders and Operations need to confirm them.</strong> Interstate 60/40 matches what we already assumed. Victoria 85/15 is invented — there is no measurement behind it, and it is the reason hand unload is no longer zero. This is the single most useful question to take to the business.</li>
+    <li><strong>The ceiling is doing all the work, not the target.</strong> ULD is the cheapest machine, so the solver goes to the top of every band: we asked for 60% interstate and got 65%, asked for 85% Victoria and got 90%. That is correct behaviour, but it means <em>the number in the file is not the number in the answer</em>. If we want the target hit exactly, we set the band to zero and pin it.</li>
+    <li><strong>Collection is still unbounded</strong> — 41,857 EA/day at 100% ULD. Extending the same mechanism to chain 1 is straightforward but sits behind a rebuild we already owe.</li>
+    <li><strong>Same pattern, other questions.</strong> Loading is symmetric to unloading and would be a data change, not a code change. The sort machines are the more interesting target — that is where the deep-sort work lands.</li>
+  </ul>
+</section>
+
+<footer>
+  <p>All figures computed from the built tables and the solved run rather than quoted — model outputs in <code>outputs/melbourne_optilogic_final/</code>, solve in <code>outputs/run_outputs/workcenter_flow_allocation/</code>. Machine costs of $0.015 (ULD), $0.020 (long reach) and $0.050 (hand) per parcel are the existing assumed rates; annual figures use 252 working days.</p>
+</footer>
+
+</div>

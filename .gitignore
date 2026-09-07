@@ -1,0 +1,164 @@
+# ---------------------------------------------------------------
+# Whitelist repo: everything at the top level is ignored by default
+# and only the folders we actually want to publish are added back.
+# Rules further down still apply INSIDE those folders (OS junk,
+# caches, large data files), so nothing heavy sneaks in.
+# ---------------------------------------------------------------
+
+# 1. Ignore every top-level entry (this alone covers inputs/, outputs/,
+#    notebooks/, .venv/, model_input_preparation/, vendor/, sql/, memory/, ...)
+/*
+
+# 2. Add back the code / docs we do want to upload
+!/.gitignore
+!/pipeline/
+!/docs/
+!/plotting/
+!/utilities/
+
+# 3. uv / project metadata
+!/pyproject.toml
+!/uv.lock
+!/.python-version
+!/README.md
+!/style.md
+
+# ---------------------------------------------------------------
+# Operating-system junk
+# ---------------------------------------------------------------
+.DS_Store
+.DS_Store?
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+Icon?
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+.directory
+.Trash-*
+.nfs*
+
+# ---------------------------------------------------------------
+# Editor / IDE
+# ---------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# ---------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------
+__pycache__/
+*.py[codz]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments / uv caches
+.venv/
+venv/
+env/
+.uv-cache/
+.python-version.local
+
+# Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+profile_default/
+ipython_config.py
+
+# ---------------------------------------------------------------
+# Large data files (ignored even inside the whitelisted folders)
+# ---------------------------------------------------------------
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.orc
+*.avro
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.db
+*.sqlite
+*.sqlite3
+*.dta
+*.sav
+*.mat
+*.shp
+*.shx
+*.dbf
+*.gpkg
+*.geojson
+
+# Archives / disk images
+*.zip
+*.gz
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.tar
+*.dmg
+*.iso
+
+# Big media
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wav
+*.psd
+
+# Logs & temp
+*.log
+*.tmp
+*.bak
+*.orig
+*.rej
+tmp/
+temp/
+
+# ---------------------------------------------------------------
+# Secrets / local config
+# ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json

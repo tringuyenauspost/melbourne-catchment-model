@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Merged Single-Stream Network Model</title>
+<!--
+  EDIT GUIDE
+  ──────────
+  · Numbers/labels: search for the text and edit in place (they appear once each).
+  · The flow picture is the inline SVG: boxes are <g class="n-src|n-mid|n-sink"> groups,
+    hub rounds are the two dashed hub-outer rectangles, arrows are <path class="edge"> elements.
+  · The parcel life cycle is plain HTML pills (.lc-row) — add/remove stages there.
+  · Colours/fonts live in the token variables at the top of the stylesheet block
+    (light + dark themes both defined).
+-->
+</head>
+<body>
+<style>
+  :root {
+    --bg: #F6F7F9; --panel: #FFFFFF; --ink: #21272F; --muted: #5B6570;
+    --line: #D8DDE3; --line-soft: #E6EAEE;
+    --src: #3D5A80; --src-bg: #EBF0F6;
+    --hub: #8E2433; --hub-bg: #F7EEF0; --hub-wash: #FBF5F6;
+    --sink: #2A6F62; --sink-bg: #E9F2F0;
+    --chip-bg: #EDF0F3; --chip-ink: #444E59;
+    --ok: #2E7D4F; --ok-bg: #E7F2EB;
+    --warn: #8A6D1F; --warn-bg: #F6F0DD;
+    --arrow: #7A828C;
+    --sans: "Avenir Next", Avenir, "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171C; --panel: #1B1F26; --ink: #E8EAED; --muted: #98A1AB;
+      --line: #343B44; --line-soft: #272D35;
+      --src: #8FB0D9; --src-bg: #1F2733;
+      --hub: #D9707F; --hub-bg: #2C2025; --hub-wash: #221B1F;
+      --sink: #6FBFAE; --sink-bg: #1D2A27;
+      --chip-bg: #262C34; --chip-ink: #B7BFC8;
+      --ok: #67C08A; --ok-bg: #1E2B23;
+      --warn: #D3B35C; --warn-bg: #2B2619;
+      --arrow: #8B939D;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171C; --panel: #1B1F26; --ink: #E8EAED; --muted: #98A1AB;
+    --line: #343B44; --line-soft: #272D35;
+    --src: #8FB0D9; --src-bg: #1F2733;
+    --hub: #D9707F; --hub-bg: #2C2025; --hub-wash: #221B1F;
+    --sink: #6FBFAE; --sink-bg: #1D2A27;
+    --chip-bg: #262C34; --chip-ink: #B7BFC8;
+    --ok: #67C08A; --ok-bg: #1E2B23;
+    --warn: #D3B35C; --warn-bg: #2B2619;
+    --arrow: #8B939D;
+  }
+  :root[data-theme="light"] {
+    --bg: #F6F7F9; --panel: #FFFFFF; --ink: #21272F; --muted: #5B6570;
+    --line: #D8DDE3; --line-soft: #E6EAEE;
+    --src: #3D5A80; --src-bg: #EBF0F6;
+    --hub: #8E2433; --hub-bg: #F7EEF0; --hub-wash: #FBF5F6;
+    --sink: #2A6F62; --sink-bg: #E9F2F0;
+    --chip-bg: #EDF0F3; --chip-ink: #444E59;
+    --ok: #2E7D4F; --ok-bg: #E7F2EB;
+    --warn: #8A6D1F; --warn-bg: #F6F0DD;
+    --arrow: #7A828C;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.55;
+    margin: 0; padding: 32px 20px 64px;
+  }
+  .page { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+
+  header .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 10px;
+  }
+  header h1 {
+    font-size: clamp(25px, 3.4vw, 33px); font-weight: 700; letter-spacing: -0.015em;
+    margin: 0 0 10px; text-wrap: balance;
+  }
+  header p.lede { max-width: 70ch; margin: 0; color: var(--muted); }
+  header p.lede strong { color: var(--ink); font-weight: 600; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px;
+  }
+  .panel > h2 {
+    font-size: 13px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 14px;
+  }
+
+  .diagram-wrap { overflow-x: auto; }
+  .diagram-wrap svg { display: block; min-width: 1150px; width: 100%; height: auto; }
+
+  /* ── SVG roles ── */
+  svg text { font-family: var(--sans); fill: var(--ink); }
+  svg .t-title  { font-size: 13px; font-weight: 700; }
+  svg .t-sub    { font-size: 11px; fill: var(--muted); }
+  svg .t-stat   { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+  svg .t-eyebrow{ font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+  svg .t-edge   { font-size: 10.5px; fill: var(--muted); }
+  svg .t-state    { font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--chip-ink); }
+  svg .t-hubhead{ font-size: 12.5px; font-weight: 700; fill: var(--hub); }
+  svg .t-machine{ font-size: 11px; }
+  svg .t-machine tspan.r { font-family: var(--mono); font-size: 10.5px; fill: var(--muted); }
+  svg .t-minisort { font-family: var(--mono); font-size: 10px; font-weight: 600; fill: var(--hub); }
+
+  svg .n-src  rect.card { fill: var(--src-bg);  stroke: var(--src);  }
+  svg .n-sink rect.card { fill: var(--sink-bg); stroke: var(--sink); }
+  svg .n-mid  rect.card { fill: var(--panel);   stroke: var(--muted); }
+  svg rect.card { stroke-width: 1.4; rx: 8; }
+  svg .n-src  .t-eyebrow { fill: var(--src); }
+  svg .n-sink .t-eyebrow { fill: var(--sink); }
+  svg .n-mid  .t-eyebrow { fill: var(--muted); }
+  svg .n-src  .t-stat { fill: var(--src); }
+  svg .n-sink .t-stat { fill: var(--sink); }
+
+  svg .hub-outer { fill: var(--hub-wash); stroke: var(--hub); stroke-width: 1.4; stroke-dasharray: 7 4; rx: 10; }
+  svg .stage rect.card { fill: var(--panel); stroke: var(--hub); rx: 6; }
+  svg .stage .t-eyebrow { fill: var(--hub); }
+
+  svg .edge { stroke: var(--arrow); stroke-width: 1.6; fill: none; marker-end: url(#arr); }
+  svg .edge.thick { stroke-width: 2.2; }
+  svg .edge.dash { stroke-dasharray: 5 4; stroke: var(--hub); }
+  svg .chip rect { fill: var(--chip-bg); stroke: none; rx: 4; }
+
+  /* ── parcel life cycle ── */
+  .lifecycle { display: flex; flex-direction: column; gap: 16px; overflow-x: auto; }
+  .lc-row { display: flex; align-items: center; gap: 0; min-width: 900px; }
+  .lc-tag { flex: 0 0 172px; padding-right: 12px; }
+  .lc-tag .r { font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em;
+               text-transform: uppercase; color: var(--hub); display: block; }
+  .lc-tag .s { font-size: 11px; color: var(--muted); display: block; margin-top: 1px; }
+  .lc-pill { font-family: var(--mono); font-size: 11.5px; font-weight: 600; white-space: nowrap;
+             border: 1.4px solid var(--muted); color: var(--chip-ink); background: var(--panel);
+             border-radius: 999px; padding: 5px 12px; flex: 0 0 auto; }
+  .lc-pill.raw  { border-color: var(--src);  color: var(--src);  background: var(--src-bg); }
+  .lc-pill.hubp { border-color: var(--hub);  color: var(--hub);  background: var(--hub-bg); }
+  .lc-pill.end  { border-color: var(--sink); color: var(--sink); background: var(--sink-bg); }
+  .lc-op { display: flex; flex-direction: column; align-items: center; flex: 1 1 58px; min-width: 58px; padding: 0 3px; }
+  .lc-op .op-lbl { font-family: var(--mono); font-size: 9px; letter-spacing: .04em; color: var(--muted); margin-bottom: 2px; white-space: nowrap; }
+  .lc-op .op-ln { width: 100%; border-top: 1.6px solid var(--arrow); position: relative; }
+  .lc-op .op-ln::after { content: "\25B8"; position: absolute; right: -1px; top: -9px; color: var(--arrow); font-size: 11px; }
+  .lc-exit { font-size: 11px; color: var(--muted); padding-left: 10px; white-space: nowrap; flex: 0 0 auto; }
+  .lc-exit b { color: var(--sink); font-weight: 650; }
+
+  /* ── balance strip ── */
+  .balance {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .b-tile {
+    flex: 1 1 130px; min-width: 128px;
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .b-tile .lbl { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .b-tile .val { font-family: var(--mono); font-size: 21px; font-weight: 700; }
+  .b-tile .sub { font-size: 11px; color: var(--muted); }
+  .b-tile.src  { background: var(--src-bg);  border-color: var(--src); }  .b-tile.src .val { color: var(--src); }
+  .b-tile.sink { background: var(--sink-bg); border-color: var(--sink); } .b-tile.sink .val { color: var(--sink); }
+  .b-op {
+    align-self: center; font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--muted);
+    padding: 0 2px;
+  }
+  .b-check {
+    align-self: center; display: flex; flex-direction: column; gap: 2px;
+    background: var(--ok-bg); border: 1px solid var(--ok); border-radius: 8px; padding: 10px 14px;
+  }
+  .b-check .top { color: var(--ok); font-weight: 700; font-size: 13.5px; }
+  .b-check .sub { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* ── tables ── */
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 28px 40px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+       text-transform: uppercase; color: var(--muted); font-weight: 600;
+       padding: 0 12px 7px 0; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  td.mono, span.mono { font-family: var(--mono); font-size: 12px; }
+  td.num { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+  td .at { color: var(--muted); }
+  .arrow-cell { color: var(--muted); }
+
+  .notes { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+  .notes li { padding-left: 18px; position: relative; max-width: 62ch; }
+  .notes li::before { content: ""; position: absolute; left: 2px; top: 9px; width: 7px; height: 7px;
+                      border-radius: 2px; background: var(--hub); }
+  .notes li strong { font-weight: 650; }
+
+  .footflags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .flag {
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: var(--chip-bg); color: var(--chip-ink); border: 1px solid var(--line);
+  }
+  .flag.warn { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); font-weight: 600; }
+  .flag .mono { font-size: 11px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="page">
+
+  <header>
+    <p class="eyebrow">Melbourne catchment · baseline v2 · one representative day</p>
+    <h1>One merged stream, two hub sort rounds</h1>
+    <p class="lede">Every parcel — catchment pickup, interstate arrivals, locally staged — rides the
+    <strong>same stage chain through a shared machine set</strong>, and every delivered parcel is now sorted
+    <strong>twice at hub level: round 1 at hub A, round 2 at a different hub B</strong> (A&nbsp;&#8800;&nbsp;B is structural,
+    not a constraint). The <strong>3 sorting pickup PUDs</strong> (Bayswater, Melbourne North, Sunshine West) keep exactly
+    20% of their pickup as <strong>round 0</strong> — bag-unloaded, sorted on-site, terminated — and linehaul exactly 80% raw.
+    Delivery PUDs only <strong>load</strong> — driver sort is removed. <strong>Sources&nbsp;=&nbsp;sinks</strong> holds across
+    the whole network by construction.</p>
+  </header>
+
+  <section class="panel">
+    <h2>Network flow — merged stream, two hub rounds</h2>
+    <div class="diagram-wrap">
+    <svg viewBox="0 0 1240 745" role="img" aria-label="Flow diagram with two hub sortation rounds: pickup and interstate arrivals enter hub A as Pickup, pass shared unload, sort and load stages to become that hub's own Despatch1 flavour, which either leaves at the co-located interstate sink after one sort, or rides a linehaul to a different hub B, where it is unloaded, sorted a second time and loaded to Despatch2, then linehauled to delivery PUDs for the driver van-load and White Van delivery. The three sorting pickup PUDs bag-unload and sort exactly twenty percent of their pickup on-site as round zero, terminating at co-located local sinks; locally staged volume re-enters delivery-ready. No hub can consume its own Despatch1 flavour, so the two sorts always happen at two different hubs.">
+      <defs>
+        <marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0 0 L8 4 L0 8 z" fill="var(--arrow)"></path>
+        </marker>
+      </defs>
+
+      <!-- ══ SOURCES ══ -->
+      <g class="n-src">
+        <rect class="card" x="16" y="58" width="204" height="86"></rect>
+        <text class="t-eyebrow" x="30" y="78">SOURCE · PICKUP</text>
+        <text class="t-title" x="30" y="97">SUP_Pickup_*</text>
+        <text class="t-sub" x="30" y="113">411 catchments · volume pinned</text>
+        <text class="t-stat" x="30" y="132">P = 83,715 /day</text>
+      </g>
+      <g class="n-src">
+        <rect class="card" x="16" y="228" width="204" height="86"></rect>
+        <text class="t-eyebrow" x="30" y="248">SOURCE · ARRIVALS</text>
+        <text class="t-title" x="30" y="267">SUP_HUB_*</text>
+        <text class="t-sub" x="30" y="283">interstate, previous night</text>
+        <text class="t-stat" x="30" y="302">IN &#8804; 125,572 /day</text>
+      </g>
+      <g class="n-src">
+        <rect class="card" x="16" y="646" width="204" height="86"></rect>
+        <text class="t-eyebrow" x="30" y="666">SOURCE · LOCAL STAGE</text>
+        <text class="t-title" x="30" y="685">SUP_PUD_* &#215;3</text>
+        <text class="t-sub" x="30" y="701">3 sorting PUDs · = kept volume</text>
+        <text class="t-stat" x="30" y="720">stage = 8,348 /day</text>
+      </g>
+
+      <!-- ══ PICKUP PUDs ══ -->
+      <g class="n-mid">
+        <rect class="card" x="278" y="58" width="170" height="112"></rect>
+        <text class="t-eyebrow" x="292" y="78">TRANSIT + SORT &#215;3</text>
+        <text class="t-title" x="292" y="97">Pickup PUDs</text>
+        <text class="t-sub" x="292" y="113">7 sites: 5 van-op + 2 transport</text>
+        <text class="t-sub" x="292" y="131">3 sort on-site (large):</text>
+        <text class="t-minisort" x="292" y="147">BW 7k &#183; MN 6.7k &#183; SW 10k /hr</text>
+      </g>
+
+      <!-- ══ HUB A (sort round 1) ══ -->
+      <rect class="hub-outer" x="500" y="96" width="424" height="178"></rect>
+      <text class="t-hubhead" x="520" y="122">HUB A &#215;4 — sort round 1 (shared machine set)</text>
+      <text class="t-sub" x="520" y="138">each hub loads its OWN Despatch1_&lt;hub&gt; flavour (DLC · MGF · MPF · TPF)</text>
+
+      <g class="stage">
+        <rect class="card" x="520" y="150" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="532" y="170">A2 · UNLOAD — R1</text>
+        <text class="t-machine" x="532" y="190">Loose <tspan class="r">15k</tspan></text>
+        <text class="t-machine" x="532" y="206">ULD <tspan class="r">55k</tspan></text>
+        <text class="t-machine" x="532" y="222">Longreach <tspan class="r">35k</tspan></text>
+      </g>
+      <g class="stage">
+        <rect class="card" x="658" y="150" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="670" y="170">A3 · SORT — R1</text>
+        <text class="t-machine" x="670" y="190">Small <tspan class="r">10&#8211;14k/hr</tspan></text>
+        <text class="t-machine" x="670" y="206">Large <tspan class="r">5.5&#8211;15k/hr</tspan></text>
+        <text class="t-machine" x="670" y="222">Manual <tspan class="r">25k/day</tspan></text>
+        <text class="t-sub" x="670" y="240">manual &#8805; 9,001/hub</text>
+      </g>
+      <g class="stage">
+        <rect class="card" x="796" y="150" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="808" y="170">A4 · LOAD — R1</text>
+        <text class="t-machine" x="808" y="190">Loose <tspan class="r">15k</tspan></text>
+        <text class="t-machine" x="808" y="206">ULD <tspan class="r">55k</tspan></text>
+        <text class="t-machine" x="808" y="222">Longreach <tspan class="r">35k</tspan></text>
+      </g>
+      <path class="edge" d="M636 200 L654 200"></path>
+      <path class="edge" d="M774 200 L792 200"></path>
+      <g class="chip"><rect x="604" y="252" width="84" height="17"></rect>
+        <text class="t-state" x="646" y="264.5" text-anchor="middle">Unload1_*</text></g>
+      <g class="chip"><rect x="748" y="252" width="72" height="17"></rect>
+        <text class="t-state" x="784" y="264.5" text-anchor="middle">Sort1_*</text></g>
+
+      <!-- 2b: hub hop A -> B -->
+      <path class="edge thick" d="M712 274 L712 314"></path>
+      <text class="t-edge" x="724" y="298" text-anchor="start">2b · linehaul HUB&#8594;HUB · Despatch1_&lt;hub&gt;_* · 12 pairs · A &#8800; B (structural)</text>
+
+      <!-- ══ HUB B (sort round 2) ══ -->
+      <rect class="hub-outer" x="500" y="318" width="424" height="178"></rect>
+      <text class="t-hubhead" x="520" y="344">HUB B &#8800; A — sort round 2 (same 4 hubs, second pass)</text>
+      <text class="t-sub" x="520" y="360">consumes only FOREIGN Despatch1 flavours — the own-flavour BOM is withheld</text>
+
+      <g class="stage">
+        <rect class="card" x="520" y="372" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="532" y="392">A2 · UNLOAD — R2</text>
+        <text class="t-machine" x="532" y="412">Loose <tspan class="r">15k</tspan></text>
+        <text class="t-machine" x="532" y="428">ULD <tspan class="r">55k</tspan></text>
+        <text class="t-machine" x="532" y="444">Longreach <tspan class="r">35k</tspan></text>
+      </g>
+      <g class="stage">
+        <rect class="card" x="658" y="372" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="670" y="392">A3 · SORT — R2</text>
+        <text class="t-machine" x="670" y="412">Small <tspan class="r">10&#8211;14k/hr</tspan></text>
+        <text class="t-machine" x="670" y="428">Large <tspan class="r">5.5&#8211;15k/hr</tspan></text>
+        <text class="t-machine" x="670" y="444">Manual <tspan class="r">25k/day</tspan></text>
+        <text class="t-sub" x="670" y="462">same sorters as R1</text>
+      </g>
+      <g class="stage">
+        <rect class="card" x="796" y="372" width="114" height="100"></rect>
+        <text class="t-eyebrow" x="808" y="392">A4 · LOAD — R2</text>
+        <text class="t-machine" x="808" y="412">Loose <tspan class="r">15k</tspan></text>
+        <text class="t-machine" x="808" y="428">ULD <tspan class="r">55k</tspan></text>
+        <text class="t-machine" x="808" y="444">Longreach <tspan class="r">35k</tspan></text>
+      </g>
+      <path class="edge" d="M636 422 L654 422"></path>
+      <path class="edge" d="M774 422 L792 422"></path>
+      <g class="chip"><rect x="604" y="474" width="84" height="17"></rect>
+        <text class="t-state" x="646" y="486.5" text-anchor="middle">Unload2_*</text></g>
+      <g class="chip"><rect x="748" y="474" width="72" height="17"></rect>
+        <text class="t-state" x="784" y="486.5" text-anchor="middle">Sort2_*</text></g>
+
+      <!-- ══ SINK: interstate (after round 1) ══ -->
+      <g class="n-sink">
+        <rect class="card" x="1000" y="96" width="224" height="96"></rect>
+        <text class="t-eyebrow" x="1014" y="116">SINK · INTERSTATE</text>
+        <text class="t-title" x="1014" y="135">CZ_Interstate_* &#215;4</text>
+        <text class="t-sub" x="1014" y="151">own-hub Despatch1 flavour · sorted once</text>
+        <text class="t-sub" x="1014" y="164">split by hub sorter capacity</text>
+        <text class="t-stat" x="1014" y="183">OUT = 41,852 /day</text>
+      </g>
+
+      <!-- ══ DELIVERY PUDs (load only) ══ -->
+      <g class="n-mid">
+        <rect class="card" x="1000" y="352" width="224" height="124"></rect>
+        <text class="t-eyebrow" x="1014" y="372">DELIVERY · PUD &#215;11 — LOAD ONLY</text>
+        <rect x="1014" y="384" width="196" height="56" rx="6" fill="none" stroke="var(--muted)" stroke-width="1.1"></rect>
+        <text class="t-title" x="1024" y="404" style="font-size:11.5px">Driver van-load</text>
+        <text class="t-sub" x="1024" y="420">80/hr &#215; 2 h wave = 160/van (&#8776;89% of 180)</text>
+        <text class="t-sub" x="1024" y="433">cap = drivers &#215; 160 · 1 wave/driver/day</text>
+        <text class="t-state" x="1112" y="464" text-anchor="middle">Despatch2_* &#8594; Delivered_*</text>
+      </g>
+
+      <!-- ══ SINK: clusters ══ -->
+      <g class="n-sink">
+        <rect class="card" x="1000" y="540" width="224" height="76"></rect>
+        <text class="t-eyebrow" x="1014" y="560">SINK · NEXT-DAY DELIVERY</text>
+        <text class="t-title" x="1014" y="579">Clusters &#215;1,046</text>
+        <text class="t-stat" x="1014" y="599">D = 167,431 /day</text>
+      </g>
+
+      <!-- ══ EDGES ══ -->
+      <!-- 1: pickup -->
+      <path class="edge thick" d="M220 101 L274 101"></path>
+      <text class="t-edge" x="247" y="90" text-anchor="middle">1 · Red Van / Truck</text>
+      <!-- 2: PUD -> HUB A linehaul -->
+      <path class="edge thick" d="M448 101 L472 101 L472 176 L497 176"></path>
+      <text class="t-edge" x="480" y="90" text-anchor="start">2 · linehaul PUD&#8594;HUB · exactly 80%</text>
+      <!-- 4: arrivals -->
+      <path class="edge thick" d="M220 271 L472 271 L472 224 L497 224"></path>
+      <text class="t-edge" x="300" y="286" text-anchor="start">4 · co-located, ~0 km</text>
+      <!-- input stage chip -->
+      <g class="chip"><rect x="404" y="196" width="64" height="17"></rect>
+        <text class="t-state" x="436" y="208.5" text-anchor="middle">Pickup_*</text></g>
+
+      <!-- round 0: pickup PUD -> local sink (dashed) -->
+      <path class="edge dash" d="M363 170 L363 312"></path>
+      <text class="t-edge" x="372" y="216" text-anchor="start">keep 20% (pinned) · round 0: BAG unload &#8594; large sort</text>
+      <g class="chip"><rect x="374" y="276" width="60" height="17"></rect>
+        <text class="t-state" x="404" y="288.5" text-anchor="middle">Sort0_*</text></g>
+      <g class="n-sink">
+        <rect class="card" x="278" y="316" width="170" height="96"></rect>
+        <text class="t-eyebrow" x="292" y="336">SINK · LOCAL TERMINATE</text>
+        <text class="t-title" x="292" y="355">CZ_LocalTerm_* &#215;3</text>
+        <text class="t-sub" x="292" y="371">kept pickup, sorted &amp; staged</text>
+        <text class="t-stat" x="292" y="390">L = 8,348 /day</text>
+      </g>
+
+      <!-- 3: handover to interstate sink (after round 1) -->
+      <path class="edge thick" d="M910 176 L958 176 L958 144 L997 144"></path>
+      <text class="t-edge" x="944" y="132" text-anchor="start">3 · handover ~0 km</text>
+      <!-- 5: linehaul HUB B -> PUD -->
+      <path class="edge thick" d="M924 412 L997 412"></path>
+      <text class="t-edge" x="928" y="402" text-anchor="start">5 · linehaul HUB&#8594;PUD</text>
+      <g class="chip"><rect x="918" y="418" width="82" height="17"></rect>
+        <text class="t-state" x="959" y="430.5" text-anchor="middle">Despatch2_*</text></g>
+
+      <!-- 4b: local stage into delivery PUD -->
+      <path class="edge" d="M220 689 L962 689 L962 458 L997 458"></path>
+      <text class="t-edge" x="300" y="680" text-anchor="start">4b · co-located stage, ~0 km · Despatch2_* (3 sorting PUDs)</text>
+
+      <!-- 6: delivery -->
+      <path class="edge thick" d="M1112 476 L1112 538"></path>
+      <text class="t-edge" x="1122" y="512" text-anchor="start">6 · White Van (160/trip) · Delivered_*</text>
+    </svg>
+    </div>
+    <p style="margin:14px 0 0; font-size:12px; color:var(--muted);">
+      Edge numbers = the lane legs in <span class="mono">TransportationPolicies</span>; A2–A4 = the stages from the
+      ops architecture slide (A1 = pickup leg, A5 = middle-mile linehauls, now including the <span class="mono">2b</span> hub hop).
+      <span class="mono">Unload0/1/2_*</span> and <span class="mono">Sort1/2_*</span> have no lanes anywhere;
+      <span class="mono">Sort0_*</span> has exactly one controlled lane per sorting PUD — to its own co-located sink.
+      <span class="mono">Despatch1_&lt;g&gt;_*</span> only leaves hub g (three hub-pair lanes + g's own interstate sink) and
+      no hub holds the round-2 BOM for its own flavour — so the two sorts always happen at two different hubs, and a
+      parcel can hop hubs exactly once.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Parcel life cycle — states carry the sortation level</h2>
+    <div class="lifecycle">
+      <div class="lc-row">
+        <span class="lc-tag"><span class="r">Round 0 · sorting PUDs</span><span class="s">kept 20% of own pickup</span></span>
+        <span class="lc-pill raw">Pickup</span>
+        <span class="lc-op"><span class="op-lbl">BAG_UNLOAD</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Unload0</span>
+        <span class="lc-op"><span class="op-lbl">SORT_0</span><span class="op-ln"></span></span>
+        <span class="lc-pill end">Sort0</span>
+        <span class="lc-exit">&#8867; terminates @ <b>CZ_LocalTerm</b> · L = 8,348/day (staged for tomorrow)</span>
+      </div>
+      <div class="lc-row">
+        <span class="lc-tag"><span class="r">Round 1 · hub A</span><span class="s">pickup exports + arrivals</span></span>
+        <span class="lc-pill raw">Pickup</span>
+        <span class="lc-op"><span class="op-lbl">UNLOAD &#215;3</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Unload1</span>
+        <span class="lc-op"><span class="op-lbl">SORT_1</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Sort1</span>
+        <span class="lc-op"><span class="op-lbl">LOAD &#215;3</span><span class="op-ln"></span></span>
+        <span class="lc-pill hubp">Despatch1_&lt;hub&gt;</span>
+        <span class="lc-exit">&#8594; interstate <b>OUT = 41,852</b> &#8867; · or linehaul to hub B &#8595;</span>
+      </div>
+      <div class="lc-row">
+        <span class="lc-tag"><span class="r">Round 2 · hub B &#8800; A</span><span class="s">all delivery-bound volume</span></span>
+        <span class="lc-pill hubp">Despatch1_&lt;hub&gt;</span>
+        <span class="lc-op"><span class="op-lbl">UNLOAD &#215;3</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Unload2</span>
+        <span class="lc-op"><span class="op-lbl">SORT_2</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Sort2</span>
+        <span class="lc-op"><span class="op-lbl">LOAD &#215;3</span><span class="op-ln"></span></span>
+        <span class="lc-pill">Despatch2</span>
+        <span class="lc-op"><span class="op-lbl">DRIVER_LOAD</span><span class="op-ln"></span></span>
+        <span class="lc-pill end">Delivered</span>
+        <span class="lc-exit">&#8867; clusters · <b>D = 167,431</b>/day</span>
+      </div>
+    </div>
+    <p style="margin:14px 0 0; font-size:12.5px; color:var(--muted); max-width:82ch;">
+      Each state &#215; {PP, EP}; <span class="mono">Despatch1</span> additionally &#215; its origin hub
+      {DLC, MGF, MPF, TPF} &#8594; <strong>26 products, 24 BOMs, all 1:1</strong>. Hub A loads only its own flavour and no hub
+      is granted the round-2 BOM for its own flavour, so a same-hub double sort is impossible — the different-hub rule
+      costs zero constraints and is asserted at build time.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Volume balance — sources = sinks</h2>
+    <div class="balance">
+      <div class="b-tile src"><span class="lbl">P · pickup</span><span class="val">83,715</span><span class="sub">50% of D · pinned per catchment</span></div>
+      <span class="b-op">+</span>
+      <div class="b-tile src"><span class="lbl">IN · arrivals</span><span class="val">125,572</span><span class="sub">D + OUT &#8722; P</span></div>
+      <span class="b-op">+</span>
+      <div class="b-tile src"><span class="lbl">stage · local</span><span class="val">8,348</span><span class="sub">= kept volume (steady state)</span></div>
+      <span class="b-op">=</span>
+      <div class="b-tile sink"><span class="lbl">D · delivered</span><span class="val">167,431</span><span class="sub">cluster demand (data)</span></div>
+      <span class="b-op">+</span>
+      <div class="b-tile sink"><span class="lbl">OUT · interstate</span><span class="val">41,852</span><span class="sub">(1&#8722;&#955;)·P, capacity-weighted</span></div>
+      <span class="b-op">+</span>
+      <div class="b-tile sink"><span class="lbl">L · local term</span><span class="val">8,348</span><span class="sub">20% of sorting-PUD pickup</span></div>
+      <div class="b-check"><span class="top">&#10003; conserved</span><span class="sub">217,635 vs 217,631 · ceil slack +4</span></div>
+    </div>
+    <p style="margin:14px 0 0; font-size:12.5px; color:var(--muted); max-width:78ch;">
+      &#955; = <span class="mono">LOCAL_SHARE = 0.50</span>: the share of pickup that stays in Melbourne. It re-enters
+      the same day as hub-fed delivery volume (steady-state closure), which is what lets the two old half-streams
+      run as one continuous flow. The second sort round moves volume hub&#8594;hub <strong>without changing the totals</strong> —
+      but hub workload nearly doubles (R1 200,939 + R2 159,083/day). Asserted at build time; slack is ceil-rounding only.
+    </p>
+  </section>
+
+  <section class="panel">
+    <div class="grid2">
+      <div>
+        <h2>The stage chain (all BOMs 1:1)</h2>
+        <table>
+          <thead><tr><th>BOM</th><th>Transform</th><th>At</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">BOM_UNLOAD0</td><td class="mono">Pickup <span class="arrow-cell">&#8594;</span> Unload0</td><td>3 sorting PUDs <span class="at">bag unload</span></td></tr>
+            <tr><td class="mono">BOM_SORT0</td><td class="mono">Unload0 <span class="arrow-cell">&#8594;</span> Sort0</td><td>3 sorting PUDs <span class="at">kept 20% terminates</span></td></tr>
+            <tr><td class="mono">BOM_UNLOAD1</td><td class="mono">Pickup <span class="arrow-cell">&#8594;</span> Unload1</td><td>hub A</td></tr>
+            <tr><td class="mono">BOM_SORT1</td><td class="mono">Unload1 <span class="arrow-cell">&#8594;</span> Sort1</td><td>hub A</td></tr>
+            <tr><td class="mono">BOM_LOAD1</td><td class="mono">Sort1 <span class="arrow-cell">&#8594;</span> Despatch1_&lt;own&gt;</td><td>hub A <span class="at">own flavour</span></td></tr>
+            <tr><td class="mono">BOM_UNLOAD2_&lt;hub&gt;</td><td class="mono">Despatch1_&lt;hub&gt; <span class="arrow-cell">&#8594;</span> Unload2</td><td>hub B <span class="at">foreign flavours only</span></td></tr>
+            <tr><td class="mono">BOM_SORT2</td><td class="mono">Unload2 <span class="arrow-cell">&#8594;</span> Sort2</td><td>hub B</td></tr>
+            <tr><td class="mono">BOM_LOAD2</td><td class="mono">Sort2 <span class="arrow-cell">&#8594;</span> Despatch2</td><td>hub B <span class="at">delivery-ready</span></td></tr>
+            <tr><td class="mono">BOM_DRIVERLOAD</td><td class="mono">Despatch2 <span class="arrow-cell">&#8594;</span> Delivered</td><td>PUD <span class="at">driver load, $0.50/EA = wage/80</span></td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:12.5px; color:var(--muted); margin:12px 0 0; max-width:52ch;">
+          Sort sites = 4 hubs (rounds 1 and 2 on the same machines) + 3 sorting pickup PUDs (round 0).
+          Driver sort removed — delivery PUDs only load. Single 1:1 intermediates make
+          <span class="mono">&#931;(unload) = &#931;(sort) = &#931;(load)</span> hold by construction, per round.
+        </p>
+      </div>
+      <div>
+        <h2>Sort capacity by site (ops, parcels/hour)</h2>
+        <table>
+          <thead><tr><th>Site</th><th>Large</th><th>Small</th><th>EA/day (&#215;20 h)</th></tr></thead>
+          <tbody>
+            <tr><td>Dandenong Letter <span class="at">HUB</span></td><td class="num">—</td><td class="num">10,000</td><td class="num">200,000</td></tr>
+            <tr><td>Melbourne Gateway <span class="at">HUB</span></td><td class="num">—</td><td class="num">14,000</td><td class="num">280,000</td></tr>
+            <tr><td>Melbourne Parcel <span class="at">HUB</span></td><td class="num">15,000</td><td class="num">10,000</td><td class="num">300k + 200k</td></tr>
+            <tr><td>Tullamarine <span class="at">HUB</span></td><td class="num">5,500</td><td class="num">10,000</td><td class="num">110k + 200k</td></tr>
+            <tr><td>Bayswater <span class="at">PUD</span></td><td class="num">7,000</td><td class="num">—</td><td class="num">140,000</td></tr>
+            <tr><td>Melbourne North <span class="at">PUD</span></td><td class="num">6,700</td><td class="num">—</td><td class="num">134,000</td></tr>
+            <tr><td>Sunshine West <span class="at">PUD</span></td><td class="num">10,000</td><td class="num">—</td><td class="num">200,000</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:12.5px; color:var(--muted); margin:12px 0 0; max-width:52ch;">
+          Hubs also keep a manual sorter (25k/day) as the exception path with a &#8805;9,001/hub floor —
+          10% of the hub-routed input, which now counts <strong>both</strong> rounds (R1 exports + arrivals; R2 all
+          delivery-bound volume). The 3 PUD sort sites also hold the local stage (staged volume was sorted on-site
+          the previous day).
+        </p>
+      </div>
+      <div>
+        <h2>Why one stream (what the merge fixed)</h2>
+        <ul class="notes">
+          <li><strong>No duplicated machines.</strong> One machine set per sort site serves all volume — fixed cost
+            charged once, both hub rounds competing for the same sorter capacity.</li>
+          <li><strong>No mid-network source/sink.</strong> Arrivals enter as raw <span class="mono">Pickup_*</span>
+            into the same chain; local pickup flows onward to real delivery — including on-site at the 3 sorting
+            pickup PUDs.</li>
+          <li><strong>Two hub rounds without duplicating hubs.</strong> The same 4 hubs play role A and role B;
+            origin-flavoured <span class="mono">Despatch1_&lt;hub&gt;_*</span> plus withheld own-flavour BOMs force the
+            two sorts onto two different hubs — no soft constraints, no tuning.</li>
+          <li><strong>One product family.</strong> 26 products (9 parcel stages &#215; 2 classes + 4 flavoured Despatch1 &#215; 2),
+            24 BOMs, 51 work centres, 85 processes, 218 production policies.</li>
+        </ul>
+      </div>
+      <div>
+        <h2>Ops term &#8596; model name</h2>
+        <table>
+          <thead><tr><th>Slide</th><th>Model</th></tr></thead>
+          <tbody>
+            <tr><td>Loose Hand</td><td class="mono">*_LOOSE</td></tr>
+            <tr><td>Forklift</td><td class="mono">*_ULD</td></tr>
+            <tr><td>Loose Longreach</td><td class="mono">*_LONGREACH</td></tr>
+            <tr><td>SPS Manual</td><td class="mono">MANUAL_SORT</td></tr>
+            <tr><td>SPS Automated</td><td class="mono">SMALL_AUTO_SORT</td></tr>
+            <tr><td>LPS Automated</td><td class="mono">LARGE_AUTO_SORT</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h2>Open items</h2>
+        <div class="footflags">
+          <span class="flag warn">Second sortation round (2026-07-16): hub workload &#8776; doubles (R1 200,939 + R2 159,083 /day); manual floor now <span class="mono">9,001/hub</span>. Interstate leaves after round 1 — point <span class="mono">CZ_Interstate</span> at <span class="mono">Despatch2</span> if it must be double-sorted too</span>
+          <span class="flag warn"><span class="mono">LOCAL_SHARE = 0.50</span> is a placeholder — replace with the real local/interstate OD split from ops</span>
+          <span class="flag warn"><span class="mono">SORT_HOURS_PER_DAY = 20</span> converts ops hourly sorter rates to EA/day — confirm the real sort window</span>
+          <span class="flag">Time &amp; despatch windows (A1.0/A3.0/A5.0) need a multi-period model</span>
+          <span class="flag">$/hr handling costs convert as <span class="mono">$/EA = ($/hr) &#247; (EA/hr)</span></span>
+          <span class="flag warn">Driver load: wage <span class="mono">$40/h</span> and drivers = <span class="mono">ceil(demand/160)</span> (1,052 waves) are placeholders — confirm wage &amp; real headcounts. Window 2 h and 1 wave/day are ops-confirmed</span>
+          <span class="flag warn">Finding: <span class="mono">80/hr &#215; 2 h = 160 &lt; 180</span> — vans cannot leave full on one wave; delivery trips costed at 160/van. If parcels are pre-staged so vans DO leave full, say so and we decouple</span>
+          <span class="flag warn">BAG_UNLOADING rate/cost (25k/day · $0.03/EA) are placeholders — ops figures needed</span>
+          <span class="flag">Kept 20% pinned at catchment share of P (BW 2,687 · MN 2,321 · SW 3,340); HUB&#8594;PUD floors scale to PUD size (Mt Waverley 387 · Abbotsford 485; others 500)</span>
+          <span class="flag warn">NEO confirmed facility caps count pickup transit — caps lifted: Bayswater 35,520&#8594;37,193 · Oakleigh South 32,375&#8594;32,844 (ops delivery cap + pinned transit); validate basis with ops</span>
+          <span class="flag">Confirm slide A3.2 — duplicate "SPS Manual" or a semi-automated tier?</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

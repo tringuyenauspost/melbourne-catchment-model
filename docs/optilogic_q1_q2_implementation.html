@@ -1,0 +1,523 @@
+<title>Sort bypass &amp; work-centre split — how to build them in chain 2</title>
+<style>
+  :root {
+    --ground:#FBFCFD; --panel:#F2F5F8; --panel-2:#FFFFFF;
+    --ink:#16222E; --body:#3A4A5A; --muted:#6B7682; --rule:#D5DDE4;
+    --navy:#0F2E4E; --teal:#1F8A8C; --amber:#C87A1E; --brick:#A8402F;
+    --teal-wash:#EAF3F3; --amber-wash:#FAF2E7; --brick-wash:#F8ECEA;
+    --code-bg:#EEF2F6; --add:#1F8A8C; --del:#A8402F;
+    --display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:#0B141D; --panel:#111E29; --panel-2:#0F1B25;
+      --ink:#E4EBF1; --body:#B4C2CE; --muted:#7C8B99; --rule:#22323F;
+      --navy:#9FC5C6; --teal:#4FB3B4; --amber:#DCA05A; --brick:#D46B58;
+      --teal-wash:#0F262B; --amber-wash:#241B10; --brick-wash:#251512;
+      --code-bg:#16242F; --add:#4FB3B4; --del:#D46B58;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:#0B141D; --panel:#111E29; --panel-2:#0F1B25;
+    --ink:#E4EBF1; --body:#B4C2CE; --muted:#7C8B99; --rule:#22323F;
+    --navy:#9FC5C6; --teal:#4FB3B4; --amber:#DCA05A; --brick:#D46B58;
+    --teal-wash:#0F262B; --amber-wash:#241B10; --brick-wash:#251512;
+    --code-bg:#16242F; --add:#4FB3B4; --del:#D46B58;
+  }
+
+  body { background:var(--ground); color:var(--body); font-family:var(--sans);
+         font-size:16px; line-height:1.62; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1020px; margin:0 auto; padding:56px 28px 96px; display:flex; flex-direction:column; gap:44px; }
+  .prose { max-width:74ch; display:flex; flex-direction:column; gap:16px; }
+
+  h1,h2,h3,h4 { color:var(--ink); text-wrap:balance; font-weight:600; }
+  h1 { font-family:var(--display); font-size:2.3rem; line-height:1.15; letter-spacing:-0.01em; }
+  h2 { font-family:var(--display); font-size:1.55rem; line-height:1.25; }
+  h3 { font-size:1.05rem; }
+  h4 { font-size:0.88rem; letter-spacing:0.04em; }
+  p { margin:0; }
+
+  .eyebrow { font-size:0.72rem; font-weight:700; letter-spacing:0.14em; text-transform:uppercase; color:var(--teal); }
+  .deck { font-family:var(--display); font-size:1.16rem; line-height:1.5; max-width:70ch; }
+  .meta { font-size:0.85rem; color:var(--muted); font-family:var(--mono); }
+  header.top { display:flex; flex-direction:column; gap:14px; border-bottom:2px solid var(--navy); padding-bottom:26px; }
+
+  section { display:flex; flex-direction:column; gap:20px; }
+  .sec-head { display:flex; flex-direction:column; gap:6px; border-top:1px solid var(--rule); padding-top:26px; }
+  .step { display:flex; flex-direction:column; gap:14px; padding-left:20px; border-left:2px solid var(--rule); }
+  .step > h3 { margin:0; }
+
+  code, .id { font-family:var(--mono); font-size:0.86em; background:var(--code-bg);
+              padding:0.1em 0.36em; border-radius:3px; color:var(--ink); }
+  pre { background:var(--code-bg); border-left:3px solid var(--navy); padding:14px 16px; overflow-x:auto;
+        font-family:var(--mono); font-size:0.79rem; line-height:1.65; color:var(--ink); }
+  pre code { background:none; padding:0; font-size:inherit; }
+  pre .add { color:var(--add); font-weight:600; }
+  pre .del { color:var(--del); }
+  pre .cmt { color:var(--muted); }
+
+  ul, ol { margin:0; padding-left:1.25em; display:flex; flex-direction:column; gap:8px; max-width:74ch; }
+  li::marker { color:var(--teal); }
+
+  .callout { background:var(--panel); border-left:3px solid var(--teal); padding:16px 20px;
+             display:flex; flex-direction:column; gap:8px; }
+  .callout.q { border-left-color:var(--amber); background:var(--amber-wash); }
+  .callout.bad { border-left-color:var(--brick); background:var(--brick-wash); }
+  .callout .lab { font-size:0.7rem; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:var(--teal); }
+  .callout.q .lab { color:var(--amber); }
+  .callout.bad .lab { color:var(--brick); }
+  .callout ul { max-width:none; }
+
+  .tablewrap { overflow-x:auto; border:1px solid var(--rule); background:var(--panel-2); }
+  table { border-collapse:collapse; width:100%; font-size:0.87rem; font-variant-numeric:tabular-nums; }
+  th { text-align:left; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);
+       font-weight:700; padding:11px 14px; border-bottom:1px solid var(--rule); white-space:nowrap; }
+  td { padding:10px 14px; border-bottom:1px solid var(--rule); vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  td.num, th.num { text-align:right; }
+  td strong { color:var(--ink); }
+  tr.total td { border-top:2px solid var(--rule); font-weight:600; color:var(--ink); }
+
+  .split { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--rule); border:1px solid var(--rule); }
+  .split > div { background:var(--panel-2); padding:18px 20px; display:flex; flex-direction:column; gap:10px; }
+  .split h4 { margin:0; font-size:0.7rem; letter-spacing:0.11em; text-transform:uppercase; }
+  .split .now h4 { color:var(--muted); }
+  .split .next h4 { color:var(--teal); }
+  .split p, .split li { font-size:0.87rem; }
+  .split ul { padding-left:1.1em; gap:6px; }
+
+  .chain { display:flex; flex-direction:column; gap:1px; background:var(--rule); border:1px solid var(--rule); overflow-x:auto; }
+  .chain .row { background:var(--panel-2); padding:14px 18px; display:grid;
+                grid-template-columns:120px 1fr; gap:16px; align-items:baseline; min-width:520px; }
+  .chain .lbl { font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); font-weight:700; }
+  .chain .val { font-family:var(--mono); font-size:0.8rem; color:var(--ink); line-height:1.7; }
+  .chain .cut { color:var(--brick); font-weight:700; }
+  .chain .join { color:var(--teal); font-weight:700; }
+
+  .bar { display:flex; height:26px; border:1px solid var(--rule); overflow:hidden; font-size:0.7rem; }
+  .bar span { display:flex; align-items:center; justify-content:center; color:#fff; font-weight:600; white-space:nowrap; }
+  .b1 { background:var(--navy); } .b2 { background:var(--teal); } .b3 { background:var(--amber); }
+  .barkey { display:flex; flex-wrap:wrap; gap:16px; font-size:0.78rem; color:var(--muted); }
+  .barkey span { display:flex; align-items:center; gap:6px; }
+  .sw { width:11px; height:11px; }
+
+  footer { border-top:1px solid var(--rule); padding-top:22px; font-size:0.82rem; color:var(--muted); max-width:74ch; }
+  ::selection { background:var(--teal); color:#fff; }
+  :focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+  @media (max-width:760px) { .split { grid-template-columns:1fr; } h1 { font-size:1.85rem; } }
+</style>
+
+<div class="wrap">
+
+<header class="top">
+  <div class="eyebrow">Implementation note · follows the Sort ByPass v2 review</div>
+  <h1>The sort bypass, and the work-centre split — read against chain 2</h1>
+  <p class="deck">Chain 1 and chain 2 stay separate entities throughout; everything here is inside chain 2. Two topics: how Optilogic's bypass actually works and which part of it we are missing, and how their user-defined-constraint pattern replaces our capacity-driven work-centre mix.</p>
+  <p class="meta">measured from outputs/melbourne_optilogic_{chain2_observed,final}/ · 13 Aug 2026</p>
+</header>
+
+<!-- ══════════════════════════ Q2 ══════════════════════════ -->
+<section>
+  <div class="sec-head">
+    <div class="eyebrow">Question 2</div>
+    <h2>Work-centre flow allocation</h2>
+  </div>
+
+  <div class="prose">
+    <h3>What we do today — it's three mechanisms stacked, and none of them is a share</h3>
+    <p>Worth being precise about this, because "hard-coded product splits" describes only the first of the three.</p>
+  </div>
+
+  <div class="prose">
+    <p><strong>Layer 1 — the choice set is hard-coded per product family</strong>, in the loop that writes <code>ProductionPolicies</code>. Each family is allowed a different subset of the three unload methods:</p>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Family</th><th>Unload methods it is allowed</th><th>Where that is decided</th></tr></thead>
+    <tbody>
+      <tr><td><code>*_INTERSTATE_*</code></td><td>ULD, LONGREACH</td><td>chain-2 notebook, production-policies cell — <code>if a in ("UNLOAD_ULD", "UNLOAD_LONGREACH")</code></td></tr>
+      <tr><td><code>*_VIC_*</code></td><td>ULD, HAND</td><td>same cell — <code>if a in ("UNLOAD_ULD", "UNLOAD_HAND")</code></td></tr>
+      <tr><td>pickup (chain 1)</td><td>ULD, LONGREACH, HAND</td><td>all three emitted as competing recipes</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="prose">
+    <p>That is a hard-coded <em>eligibility</em> rule with no number attached. It says interstate freight never arrives loose, which is a real operational claim — but it is buried in an <code>if</code>, not in a factors file, and nobody has signed it off.</p>
+
+    <p><strong>Layer 2 — capacity comes from machine rates, not from a share.</strong> Each hub gets one notional machine of each type, scaled by a per-hub dock factor sized to that hub's own workload:</p>
+  </div>
+
+  <pre><code>capacity(site, method) = rate_hr[method] × HUB_DOCK_SCALE[site] × 13.5 h
+
+  <span class="cmt">machine_rates.csv          rate_hr   $/EA    fixed $/yr</span>
+  UNLOAD_ULD                   2,750   0.015     250,000
+  UNLOAD_LONGREACH             1,750   0.020     150,000
+  UNLOAD_HAND                    750   0.050      50,000
+
+  <span class="cmt">Melbourne Parcel, scale ×3.493 →  ULD 129,652 · LR 82,505 · HAND 35,359 EA/day</span>
+  <span class="cmt">The scale is shared, so the ratio is ALWAYS 2750 : 1750 : 750 = 52.4% : 33.3% : 14.3%</span></code></pre>
+
+  <div class="prose">
+    <p>So the capacity mix at every hub is identical and is a property of the assumed machine fleet — one of each. It is not a statement about how freight actually presents.</p>
+
+    <p><strong>Layer 3 — the solver picks the cheapest allowed recipe until something binds.</strong> ULD is $0.015, long-reach $0.020, hand $0.050. With capacity nowhere near binding, the outcome is degenerate:</p>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Melbourne Parcel · unload</th><th class="num">$/EA</th><th class="num">Capacity</th><th class="num">Used</th><th class="num">Share</th><th class="num">Capacity mix</th></tr></thead>
+    <tbody>
+      <tr><td><code>UNLOAD_ULD</code></td><td class="num">0.015</td><td class="num">129,652</td><td class="num">68,198</td><td class="num"><strong>88.7%</strong></td><td class="num">52.4%</td></tr>
+      <tr><td><code>UNLOAD_LONGREACH</code></td><td class="num">0.020</td><td class="num">82,505</td><td class="num">8,702</td><td class="num">11.3%</td><td class="num">33.3%</td></tr>
+      <tr><td><code>UNLOAD_HAND</code></td><td class="num">0.050</td><td class="num">35,359</td><td class="num">0</td><td class="num"><strong>0.0%</strong></td><td class="num">14.3%</td></tr>
+      <tr class="total"><td>total</td><td class="num"></td><td class="num">247,516</td><td class="num">76,900</td><td class="num">100%</td><td class="num">100%</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout bad">
+    <span class="lab">The problem in one sentence</span>
+    <p>We size docks from an assumed workload, the solver then fills the cheapest dock first, and we read the resulting split back out and report it as a finding. Hand unload comes out at exactly zero at both hubs — so the model currently books <strong>no hand-unload labour at all</strong>, which is the most expensive activity per parcel and certainly not zero in the real operation.</p>
+  </div>
+
+  <h3>What Optilogic's construct does instead</h3>
+  <div class="prose">
+    <p>Four <code>UserDefinedVariables</code> rows and two <code>UserDefinedConstraints</code> rows. Decoded:</p>
+  </div>
+
+  <pre><code><span class="cmt">UserDefinedVariables.csv — two terms make one variable</span>
+variablename                termname             coefficient  type        processname          groupbehavior
+IN-HUB_UnloadingSplit_LR    TotalInboundVolume          -0.5  Production  grp_in-Hub_Unload    Aggregate
+IN-HUB_UnloadingSplit_LR    Total_Unloading_LR          +1.0  Production  HUB_Unload_LR        Enumerate
+
+<span class="cmt">UserDefinedConstraints.csv — pin the variable to zero</span>
+constraintname              variablename                constrainttype           constraintvalue
+HubUnloading_Forced_LR      IN-HUB_UnloadingSplit_LR    Fixed With Tolerance     0
+
+<span class="cmt">which is:   1·LR − 0.5·(LR + Other) = 0    →    LR = 50% of total unloading</span></code></pre>
+
+  <div class="prose">
+    <p>The mechanism worth understanding is the group-behaviour pair. <code>Aggregate</code> on a <em>process group</em> sums every process in it into one term — that's the denominator. <code>Enumerate</code> on a single process picks out one — that's the numerator. Put a coefficient of <code>−share</code> on the denominator and <code>+1</code> on the numerator, pin the whole thing to zero, and you have a ratio constraint.</p>
+  </div>
+
+  <h3>Side by side</h3>
+  <div class="split">
+    <div class="now">
+      <h4>Now</h4>
+      <ul>
+        <li>Mix is an <em>output</em> — you find out what it was after the solve.</li>
+        <li>Changing it means changing capacities or costs, which changes other answers too.</li>
+        <li>Eligibility rules live in <code>if</code> statements in a notebook.</li>
+        <li>Cannot express "long reach handles 30% of arrivals".</li>
+        <li>Hand unload is structurally zero.</li>
+      </ul>
+    </div>
+    <div class="next">
+      <h4>With user-defined constraints</h4>
+      <ul>
+        <li>Mix is an <em>input</em> — a number in a factors file we can show ops.</li>
+        <li>Varying it is a scenario item, not a rebuild.</li>
+        <li>All three methods stay eligible everywhere; the constraint does the work.</li>
+        <li>A band (not a pin) also tells you which way the mix <em>wants</em> to move.</li>
+        <li>Hand-unload labour is booked and costed.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>The rows we would write</h3>
+  <div class="prose">
+    <p>Our processes are already named <code>&lt;site&gt;_&lt;activity&gt;</code>, so the groups fall out of the existing naming with no new convention. For one hub, three methods, as a band rather than a pin:</p>
+  </div>
+
+  <pre><code><span class="cmt">Groups.csv — one process group per site (denominator)</span>
+<span class="add">grp_UNLOAD_Melbourne_Parcel,Processes,Melbourne_Parcel_UNLOAD_ULD,Include</span>
+<span class="add">grp_UNLOAD_Melbourne_Parcel,Processes,Melbourne_Parcel_UNLOAD_LONGREACH,Include</span>
+<span class="add">grp_UNLOAD_Melbourne_Parcel,Processes,Melbourne_Parcel_UNLOAD_HAND,Include</span>
+
+<span class="cmt">UserDefinedVariables.csv — two rows per method (target share 0.30 for long reach)</span>
+<span class="add">MPF_UnloadMix_LONGREACH,Total,   -0.30,Production,HUB_Melbourne_Parcel,grp_UNLOAD_Melbourne_Parcel,Aggregate</span>
+<span class="add">MPF_UnloadMix_LONGREACH,ThisOne, +1.00,Production,HUB_Melbourne_Parcel,Melbourne_Parcel_UNLOAD_LONGREACH,Enumerate</span>
+
+<span class="cmt">UserDefinedConstraints.csv — a BAND, not an equality: 30% ±5pp</span>
+<span class="add">MPF_UnloadMix_LONGREACH_lo,MPF_UnloadMix_LONGREACH,Min,-0.05,Include</span>
+<span class="add">MPF_UnloadMix_LONGREACH_hi,MPF_UnloadMix_LONGREACH,Max, 0.05,Include</span></code></pre>
+
+  <div class="prose">
+    <p>Because the variable is already <code>actual − target×total</code>, bounding it at ±0.05 of the total is the band. Repeat for ULD and hand and you have one site. Eight sort sites × three methods × (2 variable rows + 2 constraint rows) is <strong>96 rows across two new tables</strong> — all generated, none hand-maintained. If <code>facilitynamegroupbehavior = Enumerate</code> against a facility group does what we think, it collapses to about 12 rows; that is the first thing to test.</p>
+  </div>
+
+  <div class="callout q">
+    <span class="lab">Set two of the three, never all three</span>
+    <p>Three shares that must sum to 1 plus a flow balance is one constraint too many — pin ULD and long reach, let hand take the residue. Constraining all three means any rounding error makes the model infeasible with no diagnostic. Their prototype constrains both of its two methods, which is already one too many; it survives because both are exactly 0.5.</p>
+  </div>
+
+  <h3>How to change the generator</h3>
+  <div class="step">
+    <h3>1 · A factors file, so the number is visible</h3>
+    <pre><code><span class="cmt">inputs/factors_assumed/unload_mix.csv  (new)</span>
+<span class="add">site,method,target_share,notes</span>
+<span class="add">ALL,UNLOAD_ULD,0.55,PLACEHOLDER — needs ops confirmation</span>
+<span class="add">ALL,UNLOAD_LONGREACH,0.30,PLACEHOLDER</span>
+<span class="add">ALL,UNLOAD_HAND,0.15,PLACEHOLDER — residue, not constrained</span>
+
+<span class="cmt">inputs/factors_assumed/dials.csv  (add)</span>
+<span class="add">WC_MIX_MODE,band,str,off | band | pin — how the unload mix is enforced</span>
+<span class="add">WC_MIX_BAND,0.05,float,half-width of the mix band in share points</span></code></pre>
+    <p class="meta">Keeping these as <code>PLACEHOLDER</code> in the notes column puts them straight into the parameter workbook alongside the other 21 admitted placeholders.</p>
+  </div>
+
+  <div class="step">
+    <h3>2 · A new cell in the chain-2 notebook, after the work-centres cell</h3>
+    <p>It needs <code>site_machines</code> and <code>procs_at</code>, both of which that cell already builds, so it slots in directly after it. It emits three tables: the process groups appended to <code>Groups</code>, plus <code>UserDefinedVariables</code> and <code>UserDefinedConstraints</code>.</p>
+  </div>
+
+  <div class="step">
+    <h3>3 · Relax the eligibility rules at the same time</h3>
+    <p>The constraint only means something if all three methods are actually available. In the production-policies cell, the two family filters have to open up — otherwise you are constraining a share of a choice set that was already forced.</p>
+    <pre><code><span class="del">- if a in ("UNLOAD_ULD", "UNLOAD_LONGREACH"):        # interstate</span>
+<span class="del">- if a in ("UNLOAD_ULD", "UNLOAD_HAND"):             # Victoria</span>
+<span class="add">+ if a in UNLOADS:                                   # all three; the UDC sets the mix</span></code></pre>
+    <p>If we believe interstate genuinely never arrives loose, that belief should move into <code>unload_mix.csv</code> as a per-family share of zero, where it is visible — not stay in an <code>if</code>.</p>
+  </div>
+
+  <div class="step">
+    <h3>4 · Two lines in the combiner</h3>
+    <pre><code><span class="cmt">notebooks/melbourne-optilogic-final.ipynb, cell 2</span>
+  for name in ("BillOfMaterials", "SupplierCapabilities", ...,
+<span class="add">               "UserDefinedVariables", "UserDefinedConstraints",</span>
+               "ProductionPolicies", "Groups"):
+      concat_dedupe(name)
+
+<span class="cmt">and add both names to _want in cell 4 so the completeness assert covers them</span></code></pre>
+  </div>
+
+  <div class="callout">
+    <span class="lab">What to check on the first run</span>
+    <p>Hand unload should stop being zero, and total handling cost should <em>rise</em> — we are forcing volume off the cheapest machine onto dearer ones. If it doesn't rise, the constraint isn't binding and something is wrong with the group scoping. Then watch for the failure mode we have hit before: a pinned share above what a capacity allows goes infeasible rather than spilling, which is why <code>WC_MIX_MODE=band</code> is the default and <code>pin</code> is opt-in.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════ Q1 ══════════════════════════ -->
+<section>
+  <div class="sec-head">
+    <div class="eyebrow">Question 1</div>
+    <h2>The sort bypass — how theirs works, and what ours is missing</h2>
+  </div>
+
+  <div class="prose">
+    <h3>Four devices, and they are easy to conflate</h3>
+    <p>"Bypass" in their file is not one thing. It is four separate mechanisms that happen to appear together, and knowing which is which is most of the answer.</p>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Device</th><th>Where it lives</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><strong>A · The depth tag</strong></td><td><code>Products</code> — the <code>_L1_</code> / <code>_L2_</code> / <code>_L3_</code> in a product name</td>
+        <td>Carries <em>how finely this parcel has already been sorted</em> along with the parcel. A downstream site reads the tag to know whether it still has work to do. This is the memory of the network.</td></tr>
+      <tr><td><strong>B · Competing sort recipes</strong></td><td><code>ProductionPolicies</code> — same input, same work centre, three outputs at three prices</td>
+        <td>At the hub, <code>Unload_Parcel_1_L1_Sort</code> can become <code>Sort_Parcel_1</code> ($1, regular), <code>Sort_Parcel_2</code> ($2, depot-level) or <code>Outbound-Parcel_1</code> ($3, deep). <strong>Buying a deeper sort costs more, here, now.</strong></td></tr>
+      <tr><td><strong>C · The free conversion</strong></td><td><code>ProductionPolicies</code> — a row with <em>no work centre and no process</em></td>
+        <td>At the downstream site, a deep-sorted arrival becomes despatchable without touching a sorter. The parcel still pays unload and reload — it is physically there — it just consumes no sortation capacity. This is cross-dock.</td></tr>
+      <tr><td><strong>D · The ByPass mode</strong></td><td><code>TransportationModes</code> + a lane using it</td>
+        <td>A named mode on the hub&nbsp;→&nbsp;depot lane so the direct movement is priced and reported separately, and can be switched off by scenario. This is the one that skips the <em>building</em> rather than the <em>sorter</em>.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout q">
+    <span class="lab">C and D are different savings</span>
+    <p>A free conversion saves <strong>one sort</strong>. The ByPass mode saves <strong>a whole facility visit</strong> — unload, sort, reload, and a linehaul leg. Their prototype demonstrates C properly and leaves D broken (the lane carries products the depot has no recipe for). We have built D and not C. Worth agreeing the vocabulary before the next call.</p>
+  </div>
+
+  <h3>Their three configurations, walked end to end</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Configuration</th><th>At the hub</th><th>At the sort hub</th><th>At the depot</th><th class="num">Sorts</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Regular</strong><br><span class="meta">the only one enabled</span></td>
+        <td><code>Sort_Parcel_1</code> · $1</td>
+        <td>unload → <code>Sort_Parcel_2_2</code> · $1</td>
+        <td>unload → <code>Outbound-Parcel_3</code> · $1</td><td class="num">3</td></tr>
+      <tr><td><strong>Deep at the hub</strong><br><span class="meta">Exclude</span></td>
+        <td><code>Outbound-Parcel_1</code> · <strong>$3</strong></td>
+        <td>unload → <span class="join">free conversion</span> → <code>Outbound-Parcel_2</code></td>
+        <td>unload → <span class="join">free conversion</span> → <code>Outbound-Parcel_3</code></td><td class="num">1</td></tr>
+      <tr><td><strong>Depot-level at the hub</strong><br><span class="meta">Exclude</span></td>
+        <td><code>Sort_Parcel_2</code> · $2</td>
+        <td>unload → <code>Sort_Parcel_2_2</code> · $1</td>
+        <td>unload → <code>Outbound-Parcel_3</code> · $1</td><td class="num">3</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="prose">
+    <p>The parcel visits all three sites in every configuration. What changes is how many of them run a sorter. And the thing that stops the model choosing "deep" every time is that deep costs $3 where regular costs $1 — <strong>on the same work centre</strong>. That price is the whole economic story: a deeper sort means more chutes, smaller batches and a slower line, so it costs more per parcel at the site that does it, and saves a sort downstream. The model trades those off.</p>
+  </div>
+
+  <h3>What chain 2 already has</h3>
+  <div class="prose">
+    <p>We built a bypass in Change 25 from their earlier demo, and it is on (<code>INTERSTATE_BYPASS = free</code>). Chain 2 currently supports three routings:</p>
+  </div>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Routing</th><th>Leg</th><th class="num">Lane rows</th><th>Product path</th><th>How it is controlled</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Two rounds</strong></td><td>6 → 7</td><td class="num">42 + 435</td>
+        <td><code>Sorted</code> → <code>Despatch1_&lt;hub&gt;</code> → <code>&lt;hub&gt;_Unloaded2</code> → <code>&lt;hub&gt;_Sorted2</code> → <code>&lt;hub&gt;_Despatch2</code></td>
+        <td>only the site pairs the scans observed, each banded ±5%</td></tr>
+      <tr><td><strong>Bypass</strong> <span class="meta">(Change 25)</span></td><td>7c</td><td class="num">510</td>
+        <td><code>Sorted</code> → <code>&lt;hub&gt;_Despatch2</code> — a second load recipe at the arrival hub</td>
+        <td>competing recipe, cost decides, share banded ±5%</td></tr>
+      <tr><td><strong>Cross-dock</strong> <span class="meta">(12b)</span></td><td>6x</td><td class="num">12</td>
+        <td><code>Unloaded</code> → <code>XDock_&lt;hub&gt;</code> → sorted at the receiving depot</td>
+        <td>pinned to measured EA ±5%, four lanes out of MPF</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="prose">
+    <p>Note what the cross-dock row is: it is the hub declining to sort and pushing the work downstream. It is the <em>mirror image</em> of a deep sort, and we already have the mechanic — <code>XDock</code> products move unsorted and the depot's sorter picks them up.</p>
+  </div>
+
+  <h3>The three gaps</h3>
+
+  <div class="step">
+    <h3>1 · We have no depth tag, so the middle configuration is unbuildable</h3>
+    <p>Our <code>Sorted</code> is a single state. A parcel is either sorted or it isn't; there is no record of <em>how deeply</em>. So the bypass decision has to be taken at the load step and it is all-or-nothing about the second <em>site</em>:</p>
+    <pre><code><span class="cmt">two competing load recipes at the arrival hub, both consuming &lt;c&gt;_INTERSTATE_Sorted</span>
+BOM_LOAD_INT_&lt;c&gt;      →  &lt;c&gt;_INTERSTATE_Despatch1_&lt;hub&gt;   <span class="cmt">leg 6  → second site, gets sorted there</span>
+BOM_LOAD_DIRECT_&lt;c&gt;   →  &lt;c&gt;_INTERSTATE_&lt;hub&gt;_Despatch2   <span class="cmt">leg 7c → straight to the delivering PDC</span></code></pre>
+    <p>We can say "skip the second site" and "sort at the second site". We cannot say <strong>"pass through the second site without being sorted there"</strong> — their configuration 2, and the one the tentacle scenario needs, because a parcel that overflows Melbourne Parcel's deep-sort capacity still has to travel via somewhere.</p>
+  </div>
+
+  <div class="step">
+    <h3>2 · A deep sort costs us exactly what a regular sort costs</h3>
+    <p><code>SORT_AUTO_LGE</code> is $0.01/EA and 202,500 EA/day at Melbourne Parcel whether it produces 3 buckets or 30. So bypassing is <em>strictly</em> cheaper — it saves three machine touches and a linehaul leg and costs nothing extra. Left to economics alone, the solver bypasses everything.</p>
+  </div>
+
+  <div class="step">
+    <h3>3 · Which is why the shares are held by measurement, not by physics</h3>
+    <p>There are <strong>22 pairs of Min/Max flow constraints</strong> in the build doing exactly that job:</p>
+    <pre><code>MPF  PP  single-sort share held to 58.0% ±5%   (Min 14,440 / Max 17,164 EA)
+TPF  PP  single-sort share held to 77.4% ±5%   (Min  7,739 / Max  8,808 EA)
+SWP  PP  single-sort share held to 86.2% ±5%   (Min  4,086 / Max  4,590 EA)
+MGF  EP  single-sort share held to 70.0% ±5%   (Min  1,980 / Max  2,285 EA)   … and 18 more</code></pre>
+    <p>Those bands are standing in for a constraint the model does not have. Remove them and the answer is 100% bypass, everywhere, immediately. That is fine for calibration — we are reproducing what the scans measured — but it means <strong>the bypass share is currently an input, not a result</strong>, and no scenario can move it for a reason.</p>
+  </div>
+
+  <div class="callout bad">
+    <span class="lab">And one thing that is already broken</span>
+    <p>For the interstate family the two-round branch is <strong>orphaned</strong>: <code>*_INTERSTATE_*_Unloaded2</code> and <code>*_INTERSTATE_*_Sorted2</code> have no production policy at all, and no lane on leg 6 carries an interstate <code>Despatch1</code>. The observed routing filter found no interstate second sorts, so it pruned the recipes and left the products behind. Interstate is therefore at 100% bypass <em>structurally</em>, not by cost — the competing recipe exists but its downstream is missing. Anyone reading the tables would reasonably think there is a choice there.</p>
+  </div>
+
+  <h3>Applying their pattern to chain 2</h3>
+  <div class="prose">
+    <p>The minimum useful version is <strong>one</strong> new depth level, not three. Our chain has at most two hub sorts, so "deep" only has to mean "needs no second hub sort".</p>
+  </div>
+
+  <div class="chain">
+    <div class="row"><span class="lbl">Today</span><span class="val">Unloaded → <strong>Sorted</strong> → Despatch1_&lt;hub&gt; → Unloaded2 → Sorted2 → Despatch2</span></div>
+    <div class="row"><span class="lbl">Proposed</span><span class="val">Unloaded → <strong>Sorted_R</strong> → Despatch1_&lt;hub&gt;_R → Unloaded2_R → <span class="join">SORT</span> → Sorted2 → Despatch2</span></div>
+    <div class="row"><span class="lbl"></span><span class="val">Unloaded → <strong>Sorted_D</strong> → Despatch1_&lt;hub&gt;_D → Unloaded2_D → <span class="join">free conversion</span> → Sorted2 → Despatch2</span></div>
+    <div class="row"><span class="lbl">Unchanged</span><span class="val">Unloaded → Sorted_D → <span class="cut">Despatch2 direct (leg 7c)</span> — the Change-25 bypass still skips the site entirely</span></div>
+  </div>
+
+  <div class="prose">
+    <p>Both depth flavours rejoin at <code>Sorted2</code>, so everything downstream — despatch products, leg 7, the PDCs, demand — is untouched. The two branches differ only in whether the second site's sorter is consumed.</p>
+  </div>
+
+  <pre><code><span class="cmt">1 · the deep sort is a competing recipe at the arrival hub — a SECOND sort output</span>
+<span class="add">BOM_SORT_DEEP_INT_&lt;c&gt;      component &lt;c&gt;_INTERSTATE_Unloaded</span>
+<span class="add">ProductionPolicies: &lt;hub&gt;, &lt;c&gt;_INTERSTATE_Sorted_D, processname=&lt;site&gt;_SORT_AUTO_LGE_DEEP</span>
+
+<span class="cmt">2 · it loads to a depth-tagged Despatch1 and travels the existing leg-6 lanes</span>
+<span class="add">BOM_LOAD_DEEP_INT_&lt;c&gt;      component &lt;c&gt;_INTERSTATE_Sorted_D</span>
+<span class="add">ProductionPolicies: &lt;hub&gt;, &lt;c&gt;_INTERSTATE_Despatch1_&lt;hub&gt;_D, processname=&lt;site&gt;_LOAD_*</span>
+
+<span class="cmt">3 · at the SECOND site, the deep arrival converts for free — no work centre, no process</span>
+<span class="add">BOM_XCONV_&lt;hub&gt;_&lt;c&gt;        component &lt;c&gt;_INTERSTATE_&lt;hub&gt;_Unloaded2_D</span>
+<span class="add">ProductionPolicies: &lt;site B&gt;, &lt;c&gt;_INTERSTATE_&lt;hub&gt;_Sorted2,</span>
+<span class="add">                    workcentername="", processname="", bomname=BOM_XCONV_&lt;hub&gt;_&lt;c&gt;</span>
+<span class="cmt">   ↑ this row is the whole mechanic. It is exactly the Sort-Hub row in their prototype.</span></code></pre>
+
+  <div class="callout">
+    <span class="lab">The cleanest way to price it — and it needs nothing from Optilogic</span>
+    <p>Rather than inventing a new constraint type for the tentacle limit, model the deep sort as a <strong>second, slower process on the same work centre</strong>. A deeper sort really is slower per parcel — more chutes, smaller batches. So:</p>
+    <pre><code>Processes.csv
+  Melbourne_Parcel_SORT_AUTO_LGE        WC_SORT_AUTO_LGE_Melbourne_Parcel   202,500/day   $0.010
+<span class="add">  Melbourne_Parcel_SORT_AUTO_LGE_DEEP   WC_SORT_AUTO_LGE_Melbourne_Parcel   140,000/day   $0.018</span>
+<span class="cmt">  Same work centre, so they share ONE capacity. Deep sorting consumes it faster.</span></code></pre>
+    <p>Then the tentacle constraint is just the work-centre capacity, already in the model. A site that deep-sorts for too many destinations runs out of sorter before it runs out of parcels, and the excess is pushed onto the regular recipe and a second sort elsewhere — which is precisely the behaviour Optilogic described. No new constraint type, no binaries, no MIP.</p>
+  </div>
+
+  <div class="prose">
+    <p>The rate and cost premium are the two numbers to get from ops: <em>how much slower is a deep sort, and what does it cost per parcel</em>. Both go in <code>machine_rates.csv</code> next to the existing figures, flagged as placeholders until confirmed. Once they are real, the ±5% calibration bands can come off interstate and the bypass share becomes an <strong>output</strong> — a testable prediction against the measured 90% single-sort rather than an assumption reproducing it.</p>
+  </div>
+
+  <h3>What it costs to build</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Table</th><th class="num">New rows</th><th>What they are</th></tr></thead>
+    <tbody>
+      <tr><td><code>Products</code></td><td class="num">+32</td><td>16 live <code>Despatch1</code> flavours × a depth twin, plus their <code>Unloaded2</code> twins</td></tr>
+      <tr><td><code>BillOfMaterials</code></td><td class="num">+48</td><td>deep sort, deep load, free conversion — one each per flavour</td></tr>
+      <tr><td><code>ProductionPolicies</code></td><td class="num">+96</td><td>deep sort ×2 sorter types, deep load ×3 load methods, conversion ×1</td></tr>
+      <tr><td><code>Processes</code></td><td class="num">+11</td><td>one <code>_DEEP</code> process per sorter, on the existing work centre</td></tr>
+      <tr><td><code>TransportationPolicies</code></td><td class="num">+42</td><td>the depth-tagged <code>Despatch1</code> on the existing leg-6 origin–destination pairs</td></tr>
+      <tr><td><code>WorkCenters</code></td><td class="num">0</td><td><strong>none</strong> — the deep process shares the existing sorter's capacity</td></tr>
+      <tr class="total"><td>total</td><td class="num">+229</td><td>on a 226-product, 20,790-lane model</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout q">
+    <span class="lab">Sequence, and what to check</span>
+    <ul>
+      <li>Clear the orphaned interstate round-2 products first, or a genuinely broken deep branch will be indistinguishable from the pruned one already sitting there.</li>
+      <li>Build it <em>off</em> first (<code>DEEP_SORT = off</code> emitting nothing) and confirm a byte-identical rebuild, the same way Change 24/25 were introduced.</li>
+      <li>Turn it on with the bands still in place — the solve should barely move, because the bands pin the shares. Then take the bands off interstate and see whether the capacity-and-cost story reproduces the measured 90% single sort on its own. That is the falsifiable test.</li>
+    </ul>
+  </div>
+
+  <h3>What to put to Optilogic</h3>
+  <div class="prose">
+    <ul>
+      <li>Does a production- or flow-count constraint count <em>distinct destinations</em>, or only volume? If only volume, the slower-process approach above is strictly better and we should agree on it rather than wait.</li>
+      <li>Two processes on one work centre sharing its capacity — confirm NEO treats it as one pooled capacity and not two independent ones. Everything above depends on that.</li>
+      <li>Their configuration 2 puts a free conversion at <em>every</em> downstream site. Ours would put it at one. Is there any reason a deep-sorted parcel would need converting more than once?</li>
+      <li>Fix the ByPass-mode lane in the prototype so we can see device D working as intended — it is the one we have already built and would like to compare against.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head">
+    <div class="eyebrow">Summary</div>
+    <h2>Size of the two changes</h2>
+  </div>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>Change</th><th>New tables</th><th>New rows</th><th>Rows removed</th><th>Files touched</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Q2 · work-centre mix</strong></td><td><code>UserDefinedVariables</code>, <code>UserDefinedConstraints</code></td><td class="num">~96 + 24 group rows</td><td class="num">none</td><td>1 factors file, 1 dial pair, 1 new cell, 2 combiner lines, 1 eligibility filter</td></tr>
+      <tr><td><strong>Q1 · deep sort in chain 2</strong></td><td>none</td><td class="num">+229 across 5 tables</td><td class="num">the orphaned interstate round-2 products, first</td><td>chain-2 products / BOM / production / process / lane cells, 1 dial, <code>machine_rates.csv</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="prose">
+    <p>Neither is large, and both stay entirely inside chain 2. The work-centre mix is additive and safe to try immediately — worst case the constraint doesn't bind and nothing moves. The deep sort is structural: build it defaulting to <em>off</em> for a byte-identical rebuild, then turn it on with the calibration bands still holding, then take the bands off interstate and see whether cost and capacity reproduce the measured single-sort share on their own.</p>
+    <p>The two are connected. The deep-sort premium and the unload mix are both numbers we currently do not state — one is buried in a capacity ratio, the other in the absence of a price difference — and both are exactly the kind of parameter the workbook exists to put in front of ops.</p>
+  </div>
+</section>
+
+<footer>
+  <p>All figures computed from the current build outputs rather than quoted: <code>melbourne_optilogic_final</code> (226 products, 200 BOMs, 705 production rows, 70 work centres, 20,790 transport policies across 1,595 origin–destination pairs) and the chain-2 entity within it (144 products, 16 live <code>Despatch1</code> flavours). Unload utilisation is from the last recorded <code>OptimizationWorkCenterSummary</code> run. Chain 1 is out of scope throughout. Companion to the Sort ByPass v2 review.</p>
+</footer>
+
+</div>
