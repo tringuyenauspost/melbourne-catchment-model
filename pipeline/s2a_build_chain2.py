@@ -2882,12 +2882,14 @@ print("  Change 28 verification passed — chain 2 is the measurement")
 # --------------------------------------------------------------------------------------
 # ## 10. Periods and elapsed time
 #
-# > **Dormant.** `N_PERIODS = 1`, so no `Periods.csv` is written and section 10b does not apply. The
-# > elapsed-time reference below is independent of the period split and is still produced.
+# > **Dormant.** `N_PERIODS = 1`, so no `Periods.csv` is written and section 10b does not apply.
 #
 # `Periods` is not in our reference model, so the schema below is assumed and needs confirming against
-# Anura. Cumulative elapsed time needs a Cosmic Frog user-defined variable, which is not expressible as
-# an input CSV — the leg times are exported as a reference table for whoever configures the UDV.
+# Anura. Cumulative elapsed time needs a Cosmic Frog user-defined variable, which is not expressible
+# as an input CSV. The leg times below used to ship as `_ElapsedTimeReference.csv` for whoever
+# configures that UDV; it was removed 2026-09-08 — a ten-row table of placeholders, not an Anura
+# table, that nothing read and that rode all the way into the upload folder. The numbers still drive
+# the end-to-end print below, which is the part that was ever used.
 # --------------------------------------------------------------------------------------
 
 if N_PERIODS > 1:
@@ -2908,9 +2910,9 @@ LEG_HOURS = {
     "sort dwell": 2.0, "linehaul transit (metro)": 1.5,
     "linehaul transit (interstate)": 27.0, "terminating sort": 2.0, "delivery run": 3.0,
 }
-elapsed = pd.DataFrame([{"leg": k, "hours": v, "notes": "PLACEHOLDER — needs ops timings"}
-                        for k, v in LEG_HOURS.items()])
-write_csv(elapsed, "_ElapsedTimeReference")
+# same rule as Periods.csv above: a table this build no longer writes must not be left behind in
+# a folder that gets uploaded whole.
+(OUT / "_ElapsedTimeReference.csv").unlink(missing_ok=True)
 _local = sum(LEG_HOURS[k] for k in ["collection dwell", "first mile transit", "unload hand",
                                     "sort dwell", "linehaul transit (metro)", "terminating sort",
                                     "delivery run"])

@@ -120,22 +120,29 @@ for _n in ("UserDefinedVariables", "UserDefinedConstraints"):
         print(f"  - {_n+'.csv':<32} removed (stale — chain-2 mix bounds are now off)")
     else:
         print(f"  - {_n+'.csv':<32} not built (chain-2 mix bounds are off)")
-if (IN2 / "_ElapsedTimeReference.csv").exists():
-    write(r2("_ElapsedTimeReference"), "_ElapsedTimeReference")
+(OUT / "_ElapsedTimeReference.csv").unlink(missing_ok=True)   # dropped 2026-09-08, see s2a
 
 # ── WorkCenters: the one real merge ───────────────────────────────────────────────────
-wc = pd.concat([r1("WorkCenters"), r2("WorkCenters")], ignore_index=True).drop_duplicates()
+# THE KEY IS THE CAPACITY, NOT THE WHOLE ROW. This used to `drop_duplicates()` across every
+# column, which meant two entities describing the SAME machine collapsed only while their `notes`
+# text also matched. It stopped matching the moment chain 1 became a generator and wrote its own
+# wording, and fourteen physically identical machines — Bayswater's large sorter at 94,500 in
+# both, Melbourne Gateway's whole dock fleet — were silently DOUBLED into capacity that does not
+# exist. The distinction the merge is actually making is: one figure means both entities read the
+# same machine off machine_rates x hours, so it is one machine; two different figures mean each
+# sized a dock for its own workload, and the building carries both.
+wc = pd.concat([r1("WorkCenters"), r2("WorkCenters")], ignore_index=True)
 merged, notes = [], []
 for name, g in wc.groupby("workcentername", sort=True):
-    if len(g) == 1:
-        merged.append(g.iloc[0])
-    else:
-        row = g.iloc[0].copy()
-        row["throughputcapacity"] = int(pd.to_numeric(g["throughputcapacity"]).sum())
+    caps = sorted({int(x) for x in pd.to_numeric(g["throughputcapacity"])})
+    row = g.iloc[0].copy()
+    if len(caps) > 1:
+        row["throughputcapacity"] = sum(caps)
         row["notes"] = str(row["notes"]) + " | capacity = chain-1 + chain-2 workloads (merged)"
-        merged.append(row)
-        notes.append((name, [int(x) for x in pd.to_numeric(g["throughputcapacity"])],
-                      int(row["throughputcapacity"])))
+        notes.append((name, caps, sum(caps)))
+    else:
+        row["throughputcapacity"] = caps[0]
+    merged.append(row)
 work_centers = pd.DataFrame(merged)
 write(work_centers, "WorkCenters")
 if notes:
@@ -227,7 +234,6 @@ _want = {"Facilities", "TransportationModes", "Products", "Suppliers", "Customer
          "CustomerFulfillmentPolicies", "ReplenishmentPolicies", "TransportationPolicies",
          "FlowConstraints", "ProductionPolicies", "Groups", "OriginMix", "WorkCenters",
          "Processes"}
-_have = {p.stem for p in OUT.glob("*.csv")} - {"_ElapsedTimeReference",
-                                                  "UserDefinedVariables", "UserDefinedConstraints"}
+_have = {p.stem for p in OUT.glob("*.csv")} - {"UserDefinedVariables", "UserDefinedConstraints"}
 assert _want <= _have, f"missing tables: {_want - _have}"
 print(f"\n  {len(_have)} tables in {OUT.name} — upload this folder to Optilogic")
