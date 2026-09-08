@@ -83,6 +83,14 @@ SITE = r"[A-Z]{3}"                      # an arrival-site code, whichever ones t
 # see the note on SITE_FACILITY below.
 from model_common import CODE_SITE                       # noqa: E402  (path set up above)
 
+# Chain 1's LAST column and chain 2's FIRST column are the same parcels seen from either side, so
+# they carry the same words: "<site> · <family>", the family named as FAM_LABEL names it. The site
+# token is the three-letter code where the network has one and the short building name where it
+# does not — which is what chain 2's own sink labels already do.
+_SHORT_CODE = {n.replace("HUB_", "").replace("PUD_", ""): c for c, n in CODE_SITE.items()}
+def sink_label(short_name, family):
+    return f"{_SHORT_CODE.get(short_name, short_name.replace('_', ' '))} · {family}"
+
 
 def _model_col(table, column):
     """One column of a table in the BUILT model, so the run's own shape answers for itself."""
@@ -98,9 +106,13 @@ def _model_col(table, column):
 # The origin clusters, from the run's own pickup suppliers (`SUP_PKP_<cluster>_<postcode>`).
 # LONGEST FIRST, and that is load-bearing: the regex below is an alternation, so DANDENONG would
 # shadow DANDENONG_TR and quietly fold the two catchments into one if the order were alphabetical.
+# The last segment is NOT required to be a postcode: chain 1 gained a REGIONAL origin
+# (`SUP_PKP_REGIONAL_MPF`) that is lodged at a hub and has no van catchment, and a numeric
+# tail silently excluded it — which then read as an unknown family and tripped the stale-run
+# guard on a run that was not stale. `(.+)` stays greedy so DANDENONG_TR keeps its second word.
 CLUSTERS = sorted({m.group(1) for m in
-                   (re.match(r"^SUP_PKP_(.+)_[0-9]+$", s) for s in _model_col("Suppliers",
-                                                                             "suppliername"))
+                   (re.match(r"^SUP_PKP_(.+)_[^_]+$", s) for s in _model_col("Suppliers",
+                                                                            "suppliername"))
                    if m}, key=lambda c: (-len(c), c))
 
 # obs_legs speaks in site CODES and the run speaks in facility names. Map the code to the
@@ -163,6 +175,33 @@ def check_run_matches_model():
     model = fam(_model_col("Products", "productname")) & set(FAMILIES)
     run = fam({r["productname"] for r in
                csv.DictReader(open(SRC, encoding="utf-8-sig"))})
+    # ── AND THE SAME VOCABULARY IS NOT ENOUGH: the VOLUMES have to agree too ──────────
+    # A dial change re-derives quantities without touching a single product name, so the family
+    # test above passes on a solve of different numbers. That happened on 2026-09-07: dropping
+    # CHAIN2_PEAK_UPLIFT moved 26,583 EA from the metro handover to interstate and the page would
+    # have drawn the previous split with nothing to say it was doing so. Chain 1's sinks are the
+    # cheapest place to notice, because the model states each one as a single demand row total.
+    want = defaultdict(float)
+    for r in csv.DictReader(open(os.path.join(MODEL, "CustomerDemand.csv"), encoding="utf-8-sig")):
+        if r["customername"].startswith(("CZ_Interstate_", "CZ_LocalTerm_",
+                                         "CZ_MetroTerm_", "CZ_Regional_")):
+            want[r["customername"]] += float(r["quantity"])
+    got = defaultdict(float)
+    for r in csv.DictReader(open(SRC, encoding="utf-8-sig")):
+        if r["flowtype"] == "CustomerFulfillment" and r["destinationname"] in want:
+            got[r["destinationname"]] += float(r["flowquantity"])
+    drift = sorted(((k, got.get(k, 0.0), v) for k, v in want.items()
+                    if abs(got.get(k, 0.0) - v) > max(1.0, 0.001 * v)), key=lambda x: -abs(x[1] - x[2]))
+    if drift:
+        raise SystemExit(
+            f"\n  STALE RUN — the solve in {os.path.relpath(RUN, HERE)} carries different "
+            f"VOLUMES from the model in {os.path.relpath(MODEL, HERE)}. The product names still "
+            f"agree, so this is a dial change, not a restructure:\n"
+            + "\n".join(f"      {k:<36} run {a:>10,.0f}   model {b:>10,.0f}   {a-b:>+10,.0f}"
+                         for k, a, b in drift[:8])
+            + f"\n  Re-upload {os.path.relpath(MODEL, HERE)} to Optilogic, re-run NEO, and "
+              f"download the new summaries into {os.path.relpath(RUN, HERE)}.")
+
     missing = run - model
     if missing:
         raise SystemExit(
@@ -209,24 +248,53 @@ def build():
         # ── CHAIN 1 — collection, and where it terminates ─────────────────────────
         m = re.match(r"^SUP_PKP_(%s)_" % "|".join(CLUSTERS), o)
         if m and p.endswith("_Pickup"):
-            node(c1n, f"C:{m.group(1)}", 0, m.group(1).replace("_", " "), "origin catchment")
-            node(c1n, f"P:{d}", 1, nice(d), "first-mile depot")
-            c1l[(f"C:{m.group(1)}", f"P:{d}", cls, "PICKUP", "arrive")] += q
+            # Regional lodgement happens AT a hub, so it has no first-mile depot to draw. The
+            # ribbon spans column 1, which check_columns already counts towards every column it
+            # crosses — the freight is in the diagram, it just took a shorter road.
+            _hub = d.startswith("HUB_")
+            node(c1n, f"C:{m.group(1)}", 0, m.group(1).replace("_", " "),
+                 "lodged at the hub" if _hub else "origin catchment")
+            node(c1n, f"{'H' if _hub else 'P'}:{d}", 2 if _hub else 1, nice(d),
+                 "round-1 hub" if _hub else "first-mile depot")
+            c1l[(f"C:{m.group(1)}", f"{'H' if _hub else 'P'}:{d}", cls, "PICKUP", "arrive")] += q
             continue
         if o.startswith("PUD_") and d.startswith("HUB_") and p.endswith("_Pickup"):
             node(c1n, f"P:{o}", 1, nice(o), "first-mile depot")
             node(c1n, f"H:{d}", 2, nice(d), "round-1 hub")
             c1l[(f"P:{o}", f"H:{d}", cls, "PICKUP", "despatch")] += q
             continue
+        # ONE NODE PER BUILDING, not one per family. Chain 1 now terminates its metro volume at
+        # the ten buildings chain 2 measures it entering the delivery stream at, and keeps volume
+        # at five depots rather than three — pooling those into "Kept on site" / "Stays in
+        # Melbourne" would hide the very thing the sinks were rebuilt to say.
         if d.startswith("CZ_LocalTerm_"):
+            _b = d[len("CZ_LocalTerm_"):]
             node(c1n, f"P:{o}", 1, nice(o), "first-mile depot")
-            node(c1n, "K:LOCAL", 3, "Kept on site", "sink · staged for tomorrow")
-            c1l[(f"P:{o}", "K:LOCAL", cls, "LOCAL", "stage")] += q
+            node(c1n, f"K:{_b}", 3, sink_label(_b, FAM_LABEL["STG"]),
+                 "sink · kept at the depot that collected it")
+            c1l[(f"P:{o}", f"K:{_b}", cls, "LOCAL", "stage")] += q
             continue
         if d.startswith("CZ_Interstate_") and "_INTERSTATE_" not in p:
             node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
             node(c1n, "X:OUT", 3, "Leaves Melbourne", "sink · interstate export")
             c1l[(f"H:{o}", "X:OUT", cls, "EXPORT", "deliver")] += q
+            continue
+        # The handover, added when chain 1 was rebuilt on the peak basis: metro-bound volume
+        # leaves the collection entity here so that chain 2, which already books every metro
+        # delivery, is not asked to book it a second time.
+        if d.startswith("CZ_MetroTerm_"):
+            _b = d[len("CZ_MetroTerm_"):]
+            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, f"M:{_b}", 3, sink_label(_b, FAM_LABEL["MET"]),
+                 "sink · chain 2 collects it here")
+            c1l[(f"H:{o}", f"M:{_b}", cls, "METROTERM", "deliver")] += q
+            continue
+        if d.startswith("CZ_Regional_"):
+            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            # FROM regional Victoria, not to it: this is regional PICKUP, lodged at the hub
+            # and terminated there. The model does not follow it any further.
+            node(c1n, "R:REG", 3, "Regional pickup", "sink · lodged and ended at the hub")
+            c1l[(f"H:{o}", "R:REG", cls, "REGTERM", "deliver")] += q
             continue
 
         # ── CHAIN 2 — the delivery entity, six columns ────────────────────────────
@@ -943,9 +1011,16 @@ HTML = r"""<!doctype html>
      sharing a hue says they are related, and a lightness difference survives every kind of
      colour vision where a fourth hue would not. */
   --INTERSTATE:#2a6fd6; --EXPORT:#2a6fd6;
-  --MET:#a8641a;        --LOCAL:#a8641a;   /* the old VIC ochre, kept for continuity */
+  --MET:#a8641a;
   --REG:#5e3407;                           /* the same hue, much darker */
-  --STG:#1f8a70;        --PICKUP:#1f8a70;
+  --STG:#1f8a70;
+  /* Chain 1's outcomes ARE chain 2's source families, seen from the collection side, so each
+     takes its counterpart's exact colour: the metro handover is MET's ochre, the kept volume is
+     STG's teal, regional is REG's dark ochre. That leaves PICKUP — which is not an outcome at
+     all but the freight in transit towards one — and it goes neutral, so the four terminations
+     carry the only colour in the diagram. */
+  --METROTERM:#a8641a;  --LOCAL:#1f8a70;   --REGTERM:#5e3407;
+  --PICKUP:#7b8a92;
   --none:#8a8880;
 }
 *{box-sizing:border-box}
@@ -1090,11 +1165,13 @@ const CV = n => getComputedStyle(document.documentElement).getPropertyValue(n).t
 const COL_C = {PP:CV("--pp"), EP:CV("--ep")};
 const COL_H = {INTERSTATE:CV("--INTERSTATE"), MET:CV("--MET"), REG:CV("--REG"),
                STG:CV("--STG"), PICKUP:CV("--PICKUP"), EXPORT:CV("--EXPORT"),
-               LOCAL:CV("--LOCAL"), "":CV("--none")};
+               LOCAL:CV("--LOCAL"), METROTERM:CV("--METROTERM"), REGTERM:CV("--REGTERM"),
+               "":CV("--none")};
 const HNAME = {INTERSTATE:"Interstate", MET:"Vic Metro to Metro",
                REG:"Regional Vic to Metro Vic", STG:"Kept at depot",
-               PICKUP:"Collected today", EXPORT:"Leaves Melbourne", LOCAL:"Kept on site",
-               "":"unclassified"};
+               PICKUP:"Collected today", EXPORT:"Leaves Melbourne",
+               LOCAL:"Kept at depot", METROTERM:"Vic Metro to Metro",
+               REGTERM:"Regional pickup, ends at the hub", "":"unclassified"};
 let mode = "c", focus = "", SEL = null;
 // A SECOND BUILDING IS TWO KINDS. `round2` was sorted at the far end, `relay` was not opened at
 // all — the same move, a different amount of work — so the button that asks "did it move" has to
@@ -1229,7 +1306,8 @@ function drawLegend(){
   const keys = new Set();
   for(const k of ["1","2"]) DATA[k].links.forEach(l=>keys.add(keyOf(l)));
   const order = mode==="c" ? ["PP","EP"]
-                          : ["INTERSTATE","MET","REG","STG","PICKUP","EXPORT","LOCAL",""];
+                          : ["INTERSTATE","MET","REG","STG","PICKUP","EXPORT","LOCAL",
+                             "METROTERM","REGTERM",""];
   document.getElementById("legend").innerHTML = order.filter(k=>keys.has(k)).map(k=>{
     const col = mode==="c" ? COL_C[k] : COL_H[k];
     const nm  = mode==="c" ? (k==="PP"?"PP · normal":"EP · express") : (HNAME[k]||k);
@@ -1395,7 +1473,7 @@ def main():
     check_run_matches_model()
     data = build()
     stage = sum(l["v"] for l in data["2"]["links"] if l["s"] == "S:STG")
-    kept = sum(l["v"] for l in data["1"]["links"] if l["t"] == "K:LOCAL")
+    kept = sum(l["v"] for l in data["1"]["links"] if l["t"].startswith("K:"))
     scen = next(r["scenarioname"] for r, *_ in read_rows())
     ins = inside()
     srt = sortation(data)

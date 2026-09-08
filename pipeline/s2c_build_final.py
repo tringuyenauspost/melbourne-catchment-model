@@ -69,7 +69,32 @@ assert not _only1, f"chain 1 names facilities chain 2 has never heard of: {sorte
 _only2 = sorted(set(fac2.facilityname) - set(fac1.facilityname))
 if _only2:
     print(f"  delivery-side only (chain 2 knows them, chain 1 has no pickup there): {_only2}")
-write(fac2, "Facilities")        # chain 2's copy carries the arrival-sized throughput caps
+# Throughput caps: the SAME rule as WorkCenters below — each entity sized the building for its
+# own touches and the real building carries both, so the caps are SUMMED wherever both entities
+# declare one. Chain 1 declares a cap only for the sites it collects at (everything else is
+# blanked), so a row chain 1 does not own can never be added twice. Where chain 1 declares
+# nothing, chain 2's figure ships unchanged.
+_cap1 = fac1.set_index("facilityname").throughputcapacity
+_fac, _sum = fac2.copy(), []
+for _i, _r in _fac.iterrows():
+    _c1 = _cap1.get(_r.facilityname)
+    if pd.notna(_c1) and pd.notna(_r.throughputcapacity):
+        _tot = int(_c1) + int(_r.throughputcapacity)
+        _sum.append((_r.facilityname, int(_r.throughputcapacity), int(_c1), _tot))
+        _fac.at[_i, "throughputcapacity"] = _tot
+if _sum:
+    _ops = {r["pud"]: int(r["capacity_ea"]) for r in __import__("csv").DictReader(
+        open(REPO / "inputs" / "factors_assumed" / "pud_capacity.csv", encoding="utf-8-sig"))}
+    print("  throughput caps = chain-2 delivery + chain-1 collection (the building carries both):")
+    for _n, _d, _c, _t in sorted(_sum, key=lambda x: -x[3]):
+        _o = _ops.get(_n)
+        _vs = f"   vs ops {_o:,} = {_t/_o:.0%}" if _o else ""
+        print(f"    {_n:<26} {_d:>8,} + {_c:>8,} = {_t:>8,}{_vs}")
+    _above = [n for n, _, _, t in _sum if _ops.get(n) and t > _ops[n]]
+    if _above:
+        print(f"  ABOVE the stated ops throughput at {len(_above)} depot(s) — this is the peak "
+              f"basis showing through, not a build error: {', '.join(sorted(_above))}")
+write(_fac, "Facilities")
 tm1, tm2 = r1("TransportationModes"), r2("TransportationModes")
 assert set(tm1.modename) == set(tm2.modename)
 write(tm2, "TransportationModes")

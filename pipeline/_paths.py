@@ -51,7 +51,6 @@ FOBS = INPUTS / "factors_observed"              # written by s1a — never hand-
 SCAN_OUT = OUTPUTS / "melbourne_scan_path_analysis"    # the reduction and its cache
 CHAIN2_OUT = OUTPUTS / "melbourne_optilogic_chain2_observed"
 CHAIN1_OUT = OUTPUTS / "melbourne_optilogic_chain1"
-CHAIN1_SRC = OUTPUTS / "melbourne_optilogic_chain2_scan_constrained"   # FROZEN, 11 Aug
 FINAL_OUT = OUTPUTS / "melbourne_optilogic_final"      # the folder Cosmic Frog takes
 PRESPLIT = OUTPUTS / ".presplit"                # s3a's undo copies
 
@@ -70,5 +69,5 @@ if __name__ == "__main__":
     print(f"data root  {DATA_ROOT}      ({HOW})")
     for name, p in (("inputs", INPUTS), ("outputs", OUTPUTS), ("factors_assumed", FASS),
                     ("factors_observed", FOBS), ("melbourne (raw)", RAW),
-                    ("optilogic (schemas)", REF), ("chain-1 source", CHAIN1_SRC)):
+                    ("optilogic (schemas)", REF)):
         print(f"  {'OK ' if p.exists() else '-- '} {name:<22} {p}")
