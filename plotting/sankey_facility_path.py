@@ -67,7 +67,7 @@ from export_chain2_factors import (  # the reduction — one source of truth for
 )
 
 TARGET = OUT / "sankey-facility-path.html"
-DEPTH = 2   # touch columns drawn before the delivering depot
+DEPTH = 4   # touch columns drawn before the delivering depot
 KEEP = 20        # facilities kept per column; the page folds further, never less
 BANDS = ["INT", "METRO", "KEPT_METRO", "REGION"]     # source_band, as the page's filter
 
