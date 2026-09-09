@@ -190,8 +190,8 @@ write(proc, "Processes")
 # ── the combined balance, and the tension the combination makes visible ───────────────
 d1, d2 = r1("CustomerDemand"), r2("CustomerDemand")
 P = int(pd.to_numeric(r1("FlowConstraints")["constraintvalue"]).sum())
-OUT_ = int(d1.loc[d1.customername.str.startswith("CZ_Interstate_"), "quantity"].sum())
-L = int(d1.loc[d1.customername.str.startswith("CZ_LocalTerm_"), "quantity"].sum())
+_fam1 = {k: int(d1.loc[d1.customername.str.startswith(f"CZ_{k}_"), "quantity"].sum())
+         for k in ("Interstate", "PdoTerm", "MetroTerm", "LocalTerm", "Regional")}
 D = int(d2["quantity"].sum())
 sc2 = r2("SupplierCapabilities")
 STG = int(sc2.loc[sc2.suppliername.str.startswith("SUP_STAGE_"), "supplycapacity"].sum())
@@ -204,7 +204,12 @@ STG = int(sc2.loc[sc2.suppliername.str.startswith("SUP_STAGE_"), "supplycapacity
 MET = int(sc2.loc[sc2.suppliername.str.startswith("SUP_MET_"), "supplycapacity"].sum())
 REG = int(sc2.loc[sc2.suppliername.str.startswith("SUP_REG_"), "supplycapacity"].sum())
 VIC = MET + REG
-print(f"  chain 1 (assumed):  P {P:,} = OUT {OUT_:,} + L {L:,}")
+_LBL1 = {"Interstate": "interstate", "PdoTerm": "PDO terminate",
+         "MetroTerm": "Vic Metro to Metro", "LocalTerm": "kept at depot",
+         "Regional": "regional pickup"}
+print(f"  chain 1 (assumed):  P {P:,} = "
+      + " + ".join(f"{_LBL1[k]} {v:,}" for k, v in _fam1.items() if v)
+      + ("" if P == sum(_fam1.values()) else f"   MISMATCH ({P - sum(_fam1.values()):+,})"))
 print(f"  chain 2 (measured): D {D:,} = stage {STG:,} + VIC {VIC:,} (metro {MET:,} + regional {REG:,})"
       f" + interstate {D-STG-VIC:,}")
 print()

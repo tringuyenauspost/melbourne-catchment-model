@@ -7,7 +7,8 @@
     OUT   outputs/melbourne_optilogic_chain1/                     (17 tables)
 
 Pickup -> round-0 sort -> terminate.
-Balance: `P = Kept at depot + Vic Metro to Metro + interstate + regional pickup`.
+Balance: `P = Kept at depot + Vic Metro to Metro + PDO terminate + interstate + regional
+pickup`, where PDO terminate is a share of the export volume that ends at the same hub.
 
 NOTHING IS COPIED. The catchment suppliers are built from the geojson, lane distances from
 haversine over those coordinates, the recipes from the stage rule, machine capacities from
@@ -328,13 +329,26 @@ def generate():
     MTERM_SITE = {c: {_site_node[s]: v for (s, cc), v in MET_SITE.items() if cc == c and v}
                   for c in CLASSES}
     INTER = METRO_P - sum(KEEP.values()) - sum(MTERM.values())
+    # PDO terminate — the second half of what used to be one interstate sink. It is metro-bound
+    # volume the collection entity hands over at the hub, sized off the two families that already
+    # terminate in metro, and it stands in the SAME building the interstate sink does, so the
+    # split is in the ledger and not in the routing.
+    PDO_F   = d1("PDO_TERMINATE_FACTOR")
+    PDO_TOT = int(round(PDO_F * (sum(MTERM.values()) + sum(KEEP.values()))))
+    assert PDO_TOT <= INTER, (
+        f"PDO_TERMINATE_FACTOR {PDO_F} asks for {PDO_TOT:,} EA but only {INTER:,} is leaving "
+        f"the hubs — the carve-out cannot be larger than the sink it comes out of")
+    PDO_CLS = largest_remainder(PDO_TOT, {c: MTERM[c] + KEEP[c] for c in CLASSES})
 
     print(f"\n  chain 1 GENERATED from inputs/ ({d1('MODEL_BASIS')}), no previous build read:")
     print(f"    {len(gj):,} catchments from {d1('CATCHMENT_GEOJSON')[:38]}… over {len(FIRST)} sites")
     print(f"    metro pickup {METRO_P:,} ({FACTOR:.2f} x each site's own 2025 peak)"
           f"  +  regional {REG_P:,} at {short(REG_HUB)}  =  P {TOTAL_P:,}")
     print(f"    terminate: kept at depot {sum(KEEP.values()):,} | Vic Metro to Metro "
-          f"{sum(MTERM.values()):,} | interstate {INTER:,} | regional {REG_P:,}")
+          f"{sum(MTERM.values()):,} | PDO terminate {PDO_TOT:,} | interstate {INTER - PDO_TOT:,} "
+          f"| regional {REG_P:,}")
+    print(f"      PDO terminate is {PDO_F:.2f} x (Vic Metro to Metro + kept at depot) carved out "
+          f"of the {INTER:,} that used to leave as one interstate sink, at the same hubs")
     print(f"      sinks read off chain 2's SupplierCapabilities — "
           f"{len({s for s, _ in MET_SITE})} metro sites, {len({p for p, _ in KEEP_PUD})} depots; "
           f"chain 2 also stages {_offsite:,} EA where chain 1 never collects")
@@ -355,6 +369,17 @@ def generate():
                     rows.append((f"CZ_MetroTerm_{short(s)}", f"{c}_{t}_Despatch1_{CODE[h]}", q, h,
                                  f"Vic Metro to Metro — chain 2 collects it at {short(s)}"))
                     _left[(t, h)] -= q
+        # the carve-out spreads over the same (origin, hub) cells the interstate residual would
+        # have taken, in proportion — a share of every cell rather than whole cells, so no origin
+        # or hub stops exporting. Proportional shares cannot exceed their own cell while the
+        # total is smaller than the pool, and the assert below is what says so.
+        for (t, h), q in largest_remainder(
+                PDO_CLS[c], {k: v for k, v in _left.items() if v}).items():
+            if q:
+                rows.append((f"CZ_PdoTerm_{short(h)}", f"{c}_{t}_Despatch1_{CODE[h]}", q, h,
+                             "PDO terminate — metro-bound, handed over at the hub"))
+                _left[(t, h)] -= q
+        assert min(_left.values(), default=0) >= 0, "PDO terminate overdrew a despatch cell"
         for (t, h), q in sorted(_left.items()):
             if q:
                 rows.append((f"CZ_Interstate_{short(h)}", f"{c}_{t}_Despatch1_{CODE[h]}", q, h,
@@ -451,7 +476,8 @@ def generate():
         SINK_AT[r.cust] = (_site_node[r.cust[len("CZ_MetroTerm_"):]]
                            if r.cust.startswith("CZ_MetroTerm_") else r.src)
     NOTE = {"CZ_I": "interstate despatch sink", "CZ_M": "Vic Metro to Metro sink",
-            "CZ_L": "Kept at depot sink", "CZ_R": "regional terminate sink"}
+            "CZ_L": "Kept at depot sink", "CZ_R": "regional terminate sink",
+            "CZ_P": "PDO terminate sink — same hub building as the interstate sink"}
     T["Customers"] = frame("Customers", [
         {"customername": cn, "status": "Include", "country": "Australia",
          "latitude": XY[SINK_AT[cn]]["latitude"], "longitude": XY[SINK_AT[cn]]["longitude"],
@@ -567,7 +593,7 @@ for _n in ("Products", "BillOfMaterials", "ProductionPolicies", "Suppliers",
 _P = int(pd.to_numeric(T["FlowConstraints"].constraintvalue).sum())
 _d = T["CustomerDemand"]
 _by = {k: int(_d.loc[_d.customername.str.startswith(f"CZ_{k}"), "quantity"].sum())
-       for k in ("Interstate", "LocalTerm", "MetroTerm", "Regional")}
+       for k in ("Interstate", "PdoTerm", "LocalTerm", "MetroTerm", "Regional")}
 print(f"\n  chain-1 balance: P {_P:,} = " + " + ".join(f"{k} {v:,}" for k, v in _by.items() if v)
       + ("   OK" if _P == sum(_by.values()) else f"   MISMATCH ({_P - sum(_by.values()):+,})"))
 assert _P == sum(_by.values()), "chain-1 balance broken"

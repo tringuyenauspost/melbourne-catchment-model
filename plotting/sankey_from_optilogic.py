@@ -184,7 +184,7 @@ def check_run_matches_model():
     want = defaultdict(float)
     for r in csv.DictReader(open(os.path.join(MODEL, "CustomerDemand.csv"), encoding="utf-8-sig")):
         if r["customername"].startswith(("CZ_Interstate_", "CZ_LocalTerm_",
-                                         "CZ_MetroTerm_", "CZ_Regional_")):
+                                         "CZ_MetroTerm_", "CZ_Regional_", "CZ_PdoTerm_")):
             want[r["customername"]] += float(r["quantity"])
     got = defaultdict(float)
     for r in csv.DictReader(open(SRC, encoding="utf-8-sig")):
@@ -278,6 +278,14 @@ def build():
             node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
             node(c1n, "X:OUT", 3, "Leaves Melbourne", "sink · interstate export")
             c1l[(f"H:{o}", "X:OUT", cls, "EXPORT", "deliver")] += q
+            continue
+        # The other half of what used to be one export sink. It stands in the SAME hub building
+        # the interstate sink does — one node, like interstate and regional, because the split is
+        # in the ledger and the destination never moved.
+        if d.startswith("CZ_PdoTerm_"):
+            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, "P:PDO", 3, "PDO terminate", "sink · metro-bound, handed over at the hub")
+            c1l[(f"H:{o}", "P:PDO", cls, "PDOTERM", "deliver")] += q
             continue
         # The handover, added when chain 1 was rebuilt on the peak basis: metro-bound volume
         # leaves the collection entity here so that chain 2, which already books every metro
@@ -1020,6 +1028,10 @@ HTML = r"""<!doctype html>
      all but the freight in transit towards one — and it goes neutral, so the four terminations
      carry the only colour in the diagram. */
   --METROTERM:#a8641a;  --LOCAL:#1f8a70;   --REGTERM:#5e3407;
+  /* PDO terminate has no chain-2 counterpart to borrow from — it is carved out of the
+     export — so it takes MET's hue lightened, saying metro-bound without claiming to be
+     the measured handover. */
+  --PDOTERM:#d5a05a;
   --PICKUP:#7b8a92;
   --none:#8a8880;
 }
@@ -1166,12 +1178,13 @@ const COL_C = {PP:CV("--pp"), EP:CV("--ep")};
 const COL_H = {INTERSTATE:CV("--INTERSTATE"), MET:CV("--MET"), REG:CV("--REG"),
                STG:CV("--STG"), PICKUP:CV("--PICKUP"), EXPORT:CV("--EXPORT"),
                LOCAL:CV("--LOCAL"), METROTERM:CV("--METROTERM"), REGTERM:CV("--REGTERM"),
-               "":CV("--none")};
+               PDOTERM:CV("--PDOTERM"), "":CV("--none")};
 const HNAME = {INTERSTATE:"Interstate", MET:"Vic Metro to Metro",
                REG:"Regional Vic to Metro Vic", STG:"Kept at depot",
                PICKUP:"Collected today", EXPORT:"Leaves Melbourne",
                LOCAL:"Kept at depot", METROTERM:"Vic Metro to Metro",
-               REGTERM:"Regional pickup, ends at the hub", "":"unclassified"};
+               REGTERM:"Regional pickup, ends at the hub",
+               PDOTERM:"PDO terminate, ends at the hub", "":"unclassified"};
 let mode = "c", focus = "", SEL = null;
 // A SECOND BUILDING IS TWO KINDS. `round2` was sorted at the far end, `relay` was not opened at
 // all — the same move, a different amount of work — so the button that asks "did it move" has to
@@ -1306,8 +1319,8 @@ function drawLegend(){
   const keys = new Set();
   for(const k of ["1","2"]) DATA[k].links.forEach(l=>keys.add(keyOf(l)));
   const order = mode==="c" ? ["PP","EP"]
-                          : ["INTERSTATE","MET","REG","STG","PICKUP","EXPORT","LOCAL",
-                             "METROTERM","REGTERM",""];
+                          : ["INTERSTATE","MET","REG","STG","PICKUP","EXPORT","PDOTERM",
+                             "LOCAL","METROTERM","REGTERM",""];
   document.getElementById("legend").innerHTML = order.filter(k=>keys.has(k)).map(k=>{
     const col = mode==="c" ? COL_C[k] : COL_H[k];
     const nm  = mode==="c" ? (k==="PP"?"PP · normal":"EP · express") : (HNAME[k]||k);
