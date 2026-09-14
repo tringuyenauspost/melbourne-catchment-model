@@ -36,10 +36,12 @@ Run:  uv run python notebooks/build_final.py
 # combined building carries both.
 # --------------------------------------------------------------------------------------
 
+import math
 from pathlib import Path
 import pandas as pd
 
-from _paths import CHAIN1_OUT as IN1, CHAIN2_OUT as IN2, DATA_ROOT as REPO, FINAL_OUT as OUT
+from _paths import (CHAIN1_OUT as IN1, CHAIN2_OUT as IN2, DATA_ROOT as REPO, FASS,
+                    FINAL_OUT as OUT)
 OUT.mkdir(parents=True, exist_ok=True)
 for p in (IN1, IN2):
     assert p.exists(), f"missing entity build: {p} — run its notebook first"
@@ -144,11 +146,85 @@ for name, g in wc.groupby("workcentername", sort=True):
         row["throughputcapacity"] = caps[0]
     merged.append(row)
 work_centers = pd.DataFrame(merged)
-write(work_centers, "WorkCenters")
 if notes:
     print("  merged work centres (both entities size the same docks — capacities summed):")
     for n, parts, tot in notes:
         print(f"    {n:<34} {' + '.join(f'{p:,}' for p in parts)} = {tot:,}")
+
+# ── the merge rule is safe for DOCKS and not for SORTERS ──────────────────────────────
+# Summing two workloads is right for a dock: a building can open more doors and staff them. A
+# sorter is ONE machine with one installed rate, and NEITHER branch of the merge above can size
+# it, because both entities describe the same machine rather than a share of it:
+#
+#   chain 2 never lifts a sorter — it always writes installed rate x hours.
+#   chain 1 lifts one when its own load needs it (HUB_SORTER_POSTURE=lift_to_load).
+#
+# So when chain 1 lifts, the two figures differ and the merge SUMS them, inventing a second
+# sorter (Melbourne North: 114,711 + 90,450 = 205,161 against an installed 90,450). When chain 1
+# does not lift, the figures match and the merge COLLAPSES to installed — which silently ignores
+# that the other entity is sorting on the same machine all day. Melbourne Parcel spent this build
+# in the first state and the 2026-09-14 routing change moved it to the second: its large sorter
+# went 432,961 -> 202,500 and NEO returned a Workcenter Capacity violation of 31,139 EA, plus 11
+# round-2 sort-band Min rows it could no longer honour, ALL of them lanes into Melbourne Parcel.
+#
+# A capacity figure cannot be un-mixed back into a workload, so each entity now publishes its own
+# `_sort_load.csv` and the shared machine is sized ONCE, here, on the sum. That is the same
+# lift_to_load posture chain 1 already runs, applied to the load the building actually sees.
+_load = {}
+for _side in (IN1, IN2):
+    _f = Path(_side) / "_sort_load.csv"
+    if _f.exists():
+        for _r in pd.read_csv(_f).itertuples():
+            _load[_r.facilityname] = _load.get(_r.facilityname, 0) + int(_r.sortload_ea)
+_rate = pd.read_csv(FASS / "machine_rates.csv").set_index("machine")["rate_hr"].to_dict()
+for _r in pd.read_csv(FASS / "site_sorters.csv").itertuples():
+    _rate[(_r.site, _r.machine)] = _r.rate_hr
+_hrs = dict(zip(*pd.read_csv(FASS / "operating_hours.csv")[["kind", "hours_per_day"]].T.values))
+_head = float(pd.read_csv(FASS / "dials.csv").set_index("parameter").loc["HUB_DOCK_HEADROOM",
+                                                                        "value"])
+
+def _machine_of(wcname, facility):
+    """WC_<MACHINE>_<short facility> -> <MACHINE>."""
+    return wcname[len("WC_"):-(len(facility.split("_", 1)[1]) + 1)]
+
+_installed, _sorters = {}, {}
+for _r in work_centers.itertuples():
+    _m = _machine_of(_r.workcentername, _r.facilityname)
+    if "SORT" not in _m:
+        continue
+    _i = _rate.get((_r.facilityname, _m)) or _rate.get(_m)
+    if not _i or pd.isna(_i):
+        continue
+    _installed[_r.workcentername] = float(_i) * float(_hrs["SORT"])
+    _sorters.setdefault(_r.facilityname, []).append(_r.workcentername)
+
+_lift = []
+for _fac, _names in sorted(_sorters.items()):
+    _base = sum(_installed[n] for n in _names)
+    _need = _load.get(_fac, 0) * (1 + _head)
+    _scale = max(1.0, _need / _base) if _base else 1.0
+    for _n in _names:
+        _was = int(work_centers.loc[work_centers.workcentername == _n, "throughputcapacity"].iloc[0])
+        _now = int(math.ceil(_installed[_n] * _scale))
+        work_centers.loc[work_centers.workcentername == _n, "throughputcapacity"] = _now
+        if _was != _now:
+            work_centers.loc[work_centers.workcentername == _n, "notes"] = (
+                work_centers.loc[work_centers.workcentername == _n, "notes"].astype(str)
+                + f" | sized once on the COMBINED sort load {_load.get(_fac, 0):,} EA")
+    if _scale > 1.0:
+        _lift.append((_fac, _load.get(_fac, 0), _base, _base * _scale, _scale))
+write(work_centers, "WorkCenters")
+
+print("\n  sorters sized on the COMBINED load of both entities (one machine, one rate):")
+for _fac, _l, _b, _c, _sc in sorted(_lift, key=lambda x: -x[4]):
+    print(f"    {_fac:<28} load {_l:>9,} EA   installed {_b:>9,.0f}   lifted to {_c:>9,.0f}"
+          f"   x{_sc:.2f}")
+if _lift:
+    print("    ^ each x above 1.00 is a REAL ops shortfall at that building, not spare capacity:")
+    print("      the machine was raised to what the day needs so NEO returns a number "
+          "(HUB_SORTER_POSTURE=lift_to_load).")
+else:
+    print("    every sorter carries its combined load at the installed rate — no lift needed.")
 
 # Processes follow the merged capacities — BUT KEEP EACH PROCESS'S RATE RELATIVE TO ITS MACHINE.
 # The rule used to be `rate = merged capacity`, which is right only while every process runs at its

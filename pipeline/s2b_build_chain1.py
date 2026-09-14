@@ -1,12 +1,20 @@
 """Step 3 of the build — chain 1, the COLLECTION entity.
 
     IN    inputs/factors_assumed/          dials_chain1 + dials, machine_rates, site_sorters,
-                                          operating_hours, transport_modes, sites
+                                          operating_hours, transport_modes, sites,
+                                          first_mile_despatch
           inputs/melbourne/<geojson>      the 411 catchment polygons
           outputs/…_chain2_observed/      Facilities, TransportationModes, SupplierCapabilities
     OUT   outputs/melbourne_optilogic_chain1/                     (17 tables)
 
-Pickup -> round-0 sort -> terminate.
+Pickup -> round-0 sort -> round-1 sort -> terminate.
+
+WHERE ROUND 1 HAPPENS IS AN INPUT. first_mile_despatch.csv gives a collecting site its own
+(destination -> share) split; sites it does not name fall back to the interstate class dials, as
+every site did before 2026-09-14. The destination does not have to be a hub: a transport facility
+runs as a service, dropping to whichever buildings its trucks serve, and a depot with a sorter can
+take that linehaul and sort it. A building is therefore a round-1 sort site because volume is
+routed to it, which is the same rule the hub list already followed.
 Balance: `P = Kept at depot + Vic Metro to Metro + PDO terminate + interstate + regional
 pickup`, where PDO terminate is a share of the export volume that ends at the same hub.
 
@@ -172,11 +180,23 @@ def generate():
     FACTOR, PP_SHARE, METRO_SH = d1("PEAK_FACTOR"), d1("PP_SHARE"), d1("METRO_PICKUP_SHARE")
     REG_HUB, MPF_SH, EP_HUB = d1("REGIONAL_PICKUP_ENTRY"), d1("INTERSTATE_PP_MPF_SHARE"), d1("INTERSTATE_EP_HUB")
     POSTURE = d1("HUB_SORTER_POSTURE")
-    # the despatch split IS the hub list: a class exists at a hub because volume is routed there
+    # the despatch split IS the destination list: a class exists at a building because volume is
+    # routed there. The class dials are the DEFAULT — where a site sorts nothing itself, whatever
+    # it collects is despatched on the interstate hub split.
     hub_split = {"PP": {"HUB_Melbourne_Parcel": MPF_SH,
                         "HUB_Tullamarine_Facility": round(1 - MPF_SH, 10)},
                  "EP": {EP_HUB: 1.0}}
-    CLS_HUBS = {c: tuple(h for h, sh in hub_split[c].items() if sh > 0) for c in CLASSES}
+    # first_mile_despatch.csv OVERRIDES that default per collecting site. A transport facility
+    # runs as a SERVICE: it never sorts, and its trucks drop to a fixed set of buildings in fixed
+    # proportions that have nothing to do with which hub despatches interstate. Only sites that
+    # deviate are listed, so an unlisted site still follows the dials exactly as before.
+    SITE_SPLIT = {}
+    for r in pd.read_csv(FASS / "first_mile_despatch.csv").itertuples():
+        SITE_SPLIT.setdefault((r.site, r.product_class), {})[r.destination] = float(r.share)
+    def split_of(site, cls):
+        """The (destination -> share) this site despatches on. A per-class row wins over an ALL
+        row, and an unlisted site falls back to the class dials."""
+        return (SITE_SPLIT.get((site, cls)) or SITE_SPLIT.get((site, "ALL")) or hub_split[cls])
     assert d1("REGIONAL_PICKUP_TERMINATE") == REG_HUB
     assert d1("PEAK_ROUNDING") == "floor"
     _dl = pd.read_csv(FASS / "dials.csv").set_index("parameter")
@@ -191,7 +211,58 @@ def generate():
         SORTERS.setdefault(h, {})["SORT_MANUAL"] = int(MACH.loc["SORT_MANUAL", "rate_hr"])
     MODES = pd.read_csv(FASS / "transport_modes.csv")
     LINEHAUL = MODES[MODES.linehaul == 1]
-    VAN = MODES[MODES["mode"] == "Red_Van"].iloc[0]
+    # ── what each site collects ON ────────────────────────────────────────────────────
+    # Leg 1 was one hardcoded Red_Van for every site. A transport facility does not run a van
+    # fleet — it collects by truck — so the vehicle is an input, overrides only: a site that
+    # first_mile_pickup.csv does not name still collects on PICKUP_MODE_DEFAULT.
+    MODE_OF = {r.mode: r for r in MODES.itertuples()}
+    DEFAULT_PICKUP = d1("PICKUP_MODE_DEFAULT")
+    _fmp = pd.read_csv(FASS / "first_mile_pickup.csv")
+    PICKUP_MODE = dict(_fmp[["site", "mode"]].values)
+    # DIRECT: the site is a SERVICE, not a stop. Its vehicle collects at the catchment and drives
+    # straight to the despatch destinations, so there is ONE leg instead of pickup-then-linehaul.
+    # Nothing is unloaded, held or reloaded at the site, and it takes no throughput cap.
+    DIRECT = set(_fmp.loc[_fmp.get("direct", 0).fillna(0).astype(int) == 1, "site"])
+    for _s, _m in PICKUP_MODE.items():
+        assert _m in MODE_OF, (
+            f"first_mile_pickup.csv gives {short(_s)} the mode {_m}, which transport_modes.csv "
+            f"does not define — known modes: {sorted(MODE_OF)}")
+    def van_of(site):
+        """The vehicle this site collects on. Named van_of for the leg it builds, not the
+        vehicle: the two transport facilities collect by truck."""
+        return MODE_OF[PICKUP_MODE.get(site, DEFAULT_PICKUP)]
+    VAN = MODE_OF[DEFAULT_PICKUP]          # the regional lodgement, which is not a road pickup
+    _byveh = {}
+    for _s in FIRST:
+        _byveh.setdefault(PICKUP_MODE.get(_s, DEFAULT_PICKUP), []).append(short(_s))
+    if len(_byveh) > 1:
+        print("\n  leg-1 pickup vehicle: " + " | ".join(
+            f"{m} ({MODE_OF[m].capacity_ea:,} EA @ ${MODE_OF[m].rate_per_km}/km): "
+            f"{', '.join(sorted(v))}" for m, v in sorted(_byveh.items())))
+    assert DIRECT <= set(FIRST), (
+        f"first_mile_pickup.csv marks {sorted(DIRECT - set(FIRST))} direct, but sites.csv does "
+        f"not have them collecting")
+
+    # ── where each site's collection is despatched, and which buildings therefore sort ────
+    # DESTS is the whole routing of round 1: one (destination -> share) per (site, class). SORT1
+    # is what falls out of it — every building that receives a round-1 linehaul and must sort it.
+    # Before first_mile_despatch.csv that set was always the hubs; it can now include a depot.
+    DESTS = {(p_, c): split_of(p_, c) for p_ in FIRST for c in CLASSES}
+    SORT1 = sorted({h for d in DESTS.values() for h, sh in d.items() if sh > 0} | {REG_HUB})
+    for (p_, c), d in DESTS.items():
+        assert abs(sum(d.values()) - 1.0) < 1e-9, (
+            f"first_mile_despatch.csv: {short(p_)} {c} shares sum to {sum(d.values())}, not 1.0")
+    for h in SORT1:
+        assert h in SORTERS and any(m != "SORT_MANUAL" for m in SORTERS[h]), (
+            f"{short(h)} is a round-1 despatch destination but site_sorters.csv gives it no "
+            f"sorter — a building cannot receive a linehaul it cannot sort")
+        assert h in CODE, (
+            f"{short(h)} is a round-1 despatch destination but has no code in sites.csv — the "
+            f"Despatch1 product name is built from it")
+    _off = sorted({short(h) for h in SORT1 if h not in HUBS})
+    if _off:
+        print(f"\n  round-1 sort happens OFF-HUB at {', '.join(_off)} — "
+              f"first_mile_despatch.csv routes collection there instead of to a hub")
 
     # ── chain 2 supplies the shared identity and where pickup terminates ──────────────
     _fac2 = pd.read_csv(CHAIN2_OUT / "Facilities.csv")
@@ -244,7 +315,11 @@ def generate():
 
     # ══ 2. products, recipes, processes, work centres ═════════════════════════════════
     def hubs_of(cls, tag):
-        return (REG_HUB,) if tag == REG_TAG else CLS_HUBS[cls]
+        """The buildings that sort this (class, origin) in round 1 — a hub, or a depot where
+        first_mile_despatch.csv sends the collection there."""
+        if tag == REG_TAG:
+            return (REG_HUB,)
+        return tuple(h for h, sh in DESTS[(TAG_PUD[tag], cls)].items() if sh > 0)
     prods, boms, prod_pol = [], [], []
     for c in CLASSES:
         for t in ALL_TAGS:
@@ -308,14 +383,26 @@ def generate():
                     "processname": f"{sh}_{[m for m in SORTERS[p] if m != 'SORT_MANUAL'][0]}",
                     "notes": "round-0 sort, kept volume terminates on site"})
 
-    # the machines each building runs, and what a day of them is worth
-    machines = {h: list(UNLOADS) + sorted(SORTERS[h]) + list(LOADS) for h in HUBS}
+    # the machines each building runs, and what a day of them is worth. Docks and a sorter come
+    # from RECEIVING a round-1 linehaul, not from being a hub: a depot that first_mile_despatch
+    # sends collection to unloads, sorts and loads it exactly as a hub does. A site can be both —
+    # Melbourne North collects its own catchment (round 0, bag unload) AND sorts what Melbourne
+    # Transport drops (round 1, docks) — so the two lists are unioned, never overwritten.
+    machines = {h: list(UNLOADS) + sorted(SORTERS[h]) + list(LOADS) for h in SORT1}
     for p in SORT0:
-        machines[p] = ["BAG_UNLOAD"] + sorted(SORTERS[p])
+        machines[p] = ["BAG_UNLOAD"] + machines.get(p, sorted(SORTERS[p]))
     def rate(site, m):
         return SORTERS.get(site, {}).get(m) or int(MACH.loc[m, "rate_hr"])
     def kind(m):
+        """Which operating window the machine runs in — BAG_UNLOAD is an unload shift."""
         return "UNLOAD" if "UNLOAD" in m else "LOAD" if "LOAD" in m else "SORT"
+    def pool(m):
+        """Which machines compete for the same work, and so may be sized as one group.
+        BAG_UNLOAD is NOT one of the dock unloads even though it unloads: its only recipe is
+        BOM_UNLOAD0_ALL (a van arriving from the catchment) and the dock unloads' only recipes
+        are the round-1 BOM_UNLOAD_*. The volumes cannot move between them, so pooling their
+        capacity would let a shortfall on one be paid for by slack on the other."""
+        return "BAG" if m == "BAG_UNLOAD" else kind(m)
 
     # ══ 3. where it terminates — chain 2's own tables, so the two tie by construction ══
     MET_SITE = _c2_supply("SUP_MET_")
@@ -354,11 +441,12 @@ def generate():
           f"chain 2 also stages {_offsite:,} EA where chain 1 never collects")
 
     # ══ 4. the demand rows ════════════════════════════════════════════════════════════
-    rows, hub_in = [], {h: 0 for h in HUBS}
+    rows, hub_in = [], {h: 0 for h in SORT1}
     for c in CLASSES:
         despatch = {}
         for p, t in ORIGIN_TAG.items():
-            for h, q in largest_remainder(PIN[(p, c)] - KEEP_PUD.get((p, c), 0), hub_split[c]).items():
+            for h, q in largest_remainder(PIN[(p, c)] - KEEP_PUD.get((p, c), 0),
+                                          DESTS[(p, c)]).items():
                 despatch[(t, h)] = q
                 hub_in[h] += q
         _left = dict(despatch)
@@ -419,9 +507,13 @@ def generate():
             cap.append({"suppliername": r.sup, "productname": pr, "status": "Include",
                         "supplycapacity": PERCAT[(r.node, c)], "supplycapacityuom": "EA",
                         "notes": "catchment pickup, ALL"})
-            proc_p.append({"facilityname": r.node, "productname": pr, "sourcename": r.sup,
-                           "status": "Include", "notes": "catchment pickup into its PDC"})
-            d = km(r.node, r.node)  # placeholder, replaced below
+            # where the collection is DELIVERED. Normally its own depot; for a service site the
+            # truck never stops there, so it is procured straight into each despatch destination.
+            for _e in (hubs_of(c, ORIGIN_TAG[r.node]) if r.node in DIRECT else (r.node,)):
+                proc_p.append({"facilityname": _e, "productname": pr, "sourcename": r.sup,
+                    "status": "Include", "notes": "catchment pickup, direct to the sorting "
+                    f"building ({short(_e)}) — no stop at {short(r.node)}" if r.node in DIRECT
+                    else "catchment pickup into its PDC"})
     # leg 1 needs the supplier's own coordinate, which is not a facility — compute directly
     def km_pt(lat, lon, node):
         p, q = math.radians(lat), math.radians(lon)
@@ -429,14 +521,19 @@ def generate():
         return round(2 * 6371 * math.asin(math.sqrt(
             math.sin((rr - p) / 2) ** 2 + math.cos(p) * math.cos(rr) * math.sin((s - q) / 2) ** 2)), 2)
     for r in gj.sort_values(["node", "post_code"]).itertuples():
-        d = km_pt(r.lat, r.lon, r.node)
+        v, direct = van_of(r.node), r.node in DIRECT
         for c in CLASSES:
-            leg1.append({"originname": r.sup, "destinationname": r.node,
-                "productname": f"{c}_{ORIGIN_TAG[r.node]}_Pickup", "modename": VAN["mode"],
-                "status": "Include", "fixedcost": round(VAN.rate_per_km * d, 2),
-                "fixedcostrule": "Prorate", "averageshipmentsize": float(VAN.capacity_ea),
-                "averageshipmentsizeuom": "EA", "transportdistance": d,
-                "transportdistanceuom": "KM", "notes": "1 pickup: catchment->PDC"})
+            for e in (hubs_of(c, ORIGIN_TAG[r.node]) if direct else (r.node,)):
+                d = km_pt(r.lat, r.lon, e)
+                leg1.append({"originname": r.sup, "destinationname": e,
+                    "productname": f"{c}_{ORIGIN_TAG[r.node]}_Pickup", "modename": v.mode,
+                    "status": "Include", "fixedcost": round(v.rate_per_km * d, 2),
+                    "fixedcostrule": "Prorate", "averageshipmentsize": float(v.capacity_ea),
+                    "averageshipmentsizeuom": "EA", "transportdistance": d,
+                    "transportdistanceuom": "KM",
+                    "notes": (f"1 pickup: catchment->{short(e)} DIRECT on {v.mode} "
+                              f"({short(r.node)} service, no stop)" if direct
+                              else f"1 pickup: catchment->PDC on {v.mode}")})
     for c in CLASSES:
         cap.append({"suppliername": REG_SUP, "productname": f"{c}_{REG_TAG}_Pickup",
                     "status": "Include", "supplycapacity": REG_PIN[c], "supplycapacityuom": "EA",
@@ -445,7 +542,7 @@ def generate():
                        "sourcename": REG_SUP, "status": "Include",
                        "notes": "regional lodgement into the hub"})
         leg1.append({"originname": REG_SUP, "destinationname": REG_HUB,
-            "productname": f"{c}_{REG_TAG}_Pickup", "modename": VAN["mode"], "status": "Include",
+            "productname": f"{c}_{REG_TAG}_Pickup", "modename": VAN.mode, "status": "Include",
             "fixedcost": 0.0, "fixedcostrule": "Prorate",
             "averageshipmentsize": float(VAN.capacity_ea), "averageshipmentsizeuom": "EA",
             "transportdistance": 0.0, "transportdistanceuom": "KM",
@@ -456,8 +553,10 @@ def generate():
     # leg 2 + the replenishment that lets raw pickup reach a hub
     rep, leg2 = [], []
     for p, t in sorted(ORIGIN_TAG.items()):
+        if p in DIRECT:
+            continue          # one leg only — the truck already delivered it in leg 1
         for c in CLASSES:
-            for h in CLS_HUBS[c]:
+            for h in hubs_of(c, t):
                 rep.append({"facilityname": h, "productname": f"{c}_{t}_Pickup", "sourcename": p,
                             "status": "Include", "notes": "PDC->hub raw pickup"})
                 d = km(p, h)
@@ -511,13 +610,20 @@ def generate():
           f"a building other than the one that sorted it, so it books a leg (leg 3c)")
 
     # the pins
+    # The pin says "this much WAS collected from these catchments". It has always named the
+    # building the collection arrives at; a service site is not one, so for those the destination
+    # is the GROUP of buildings its trucks deliver to. Same volume, same meaning — the pin stays
+    # a statement about collection and says nothing about how it splits across the group.
     fc = [{"originname": "Pickup_Suppliers", "originnamegroupbehavior": "Aggregate",
-           "destinationname": p, "destinationnamegroupbehavior": "Aggregate",
+           "destinationname": f"Entry_{ORIGIN_TAG[p]}" if p in DIRECT else p,
+           "destinationnamegroupbehavior": "Aggregate",
            "productname": f"{c}_{ORIGIN_TAG.get(p, REG_TAG)}_Pickup",
            "productnamegroupbehavior": "Aggregate", "periodname": "ALL",
            "periodnamegroupbehavior": "Aggregate", "constrainttype": "Min",
            "constraintvalue": v, "status": "Include",
-           "notes": "pickup pinned to catchment volume"}
+           "notes": (f"pickup pinned to catchment volume — delivered direct across "
+                     f"Entry_{ORIGIN_TAG[p]}" if p in DIRECT
+                     else "pickup pinned to catchment volume")}
           for (p, c), v in sorted(PIN.items())]
     fc += [{"originname": "Pickup_Suppliers", "originnamegroupbehavior": "Aggregate",
             "destinationname": REG_HUB, "destinationnamegroupbehavior": "Aggregate",
@@ -537,19 +643,37 @@ def generate():
              "status": "Include"} for r in sites.itertuples() if r.role != "hub"]
     grp += [{"groupname": f"Origin_{t}", "grouptype": "Facilities", "membername": TAG_PUD[t],
              "status": "Include", "notes": f"first-mile sites for {t}"} for t in TAGS_]
+    grp += [{"groupname": f"Entry_{ORIGIN_TAG[p_]}", "grouptype": "Facilities", "membername": e,
+             "status": "Include",
+             "notes": f"where {short(p_)}'s direct pickup is delivered"}
+            for p_ in sorted(DIRECT)
+            for e in sorted({h for c in CLASSES for h in hubs_of(c, ORIGIN_TAG[p_])})]
     T["Groups"] = frame("Groups", grp)
 
     # ══ 6. machines, sized to this entity's own load ══════════════════════════════════
-    load = {**hub_in, **{p: PIN[(p, "EP")] + PIN[(p, "PP")] for p in PEAK}}
+    # A building's day is everything that lands on it. hub_in is what round 1 despatches to it;
+    # PIN is what it collects itself. Before the per-site split those two sets never overlapped,
+    # so a dict merge was enough; now Melbourne North and Bayswater are in both and the merge
+    # would have DROPPED the round-1 arrivals — sizing their machines and their facility cap on
+    # their own collection alone.
+    # What each building physically handles. A service site handles NOTHING — its trucks run
+    # catchment -> sorting building without stopping — so it is left out here, which is what
+    # keeps it out of `load`, out of the work centres and out of the Facilities cap.
+    collected = {p_: PIN[(p_, "EP")] + PIN[(p_, "PP")] for p_ in PEAK if p_ not in DIRECT}
+    load = {s_: hub_in.get(s_, 0) + collected.get(s_, 0) for s_ in set(hub_in) | set(collected)}
     wc, procs = [], []
     for site in sorted(machines):
         sh = short(site)
+        # what each pool actually has to get through: the vans unload what this site collects,
+        # the docks handle what round 1 sends it, and the sorter sees both.
+        need_of = {"BAG": collected.get(site, 0), "UNLOAD": hub_in.get(site, 0),
+                   "LOAD": hub_in.get(site, 0), "SORT": load.get(site, 0)}
         base = {m: rate(site, m) * HOURS[kind(m)] for m in machines[site]}
-        for k in ("UNLOAD", "LOAD", "SORT"):
-            grp_m = [m for m in machines[site] if kind(m) == k]
+        for k in ("BAG", "UNLOAD", "LOAD", "SORT"):
+            grp_m = [m for m in machines[site] if pool(m) == k]
             if not grp_m:
                 continue
-            need = load.get(site, 0) * (1 + DOCK_HEAD)
+            need = need_of[k] * (1 + DOCK_HEAD)
             if k == "SORT" and POSTURE != "lift_to_load":
                 need = 0
             scale = max(1.0, need / sum(base[m] for m in grp_m))
@@ -567,6 +691,13 @@ def generate():
                     "unitcost": float(MACH.loc[m, "unit_cost"]), "unitcostuom": "EA",
                     "notes": f"{m} at {sh}"})
     T["WorkCenters"] = frame("WorkCenters", wc)
+    # Publish the SORT load so the combiner can size a shared sorter ONCE. A dock can be added to;
+    # a sorter is one machine, and each entity sizing it for its own half and then merging the two
+    # figures cannot land on the truth — see the header of s2c's sorter block.
+    pd.DataFrame(sorted((f, int(v)) for f, v in load.items() if f in machines
+                        and any(kind(m) == "SORT" for m in machines[f])),
+                 columns=["facilityname", "sortload_ea"]).to_csv(
+        OUT / "_sort_load.csv", index=False, encoding="utf-8-sig")
     T["Processes"] = frame("Processes", procs)
 
     # facilities: chain 2's copy for identity, this entity's own cap where it collects

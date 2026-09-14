@@ -1816,6 +1816,13 @@ for site in sorted(DELIVERY_PUD_SET):
 
 work_centers = pd.DataFrame(wc_rows, columns=WC_COLS)
 write_csv(work_centers, "WorkCenters")
+# Publish this entity's per-site SORT load (pre-headroom), for the same reason chain 1 does: the
+# combiner cannot size a shared sorter from two capacity figures, only from the two workloads.
+# `_r1_hub` + the round-2 share is exactly what `_need` above is built from.
+pd.DataFrame(sorted((h, int(_r1_hub[h] + min(_r2_even, _r2_pool[h])))
+                    for h in _r1_hub if h in SORT_SITES),
+             columns=["facilityname", "sortload_ea"]).to_csv(
+    OUT / "_sort_load.csv", index=False, encoding="utf-8-sig")
 
 _hub_dock = work_centers[work_centers.workcentername.str.startswith("WC_UNLOAD")]
 _hub_dock = _hub_dock[_hub_dock.facilityname.isin(HUB_SET)]

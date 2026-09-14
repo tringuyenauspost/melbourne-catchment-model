@@ -11,8 +11,13 @@ The map answers "which lanes carry what". This answers "what is the whole path" 
 stage from the source that creates volume to the sink that consumes it, with the width
 of each ribbon proportional to EA/day.
 
-  CHAIN 1  origin catchment → first-mile depot → hub → terminates
+  CHAIN 1  origin catchment → first-mile depot → round-1 sort → terminates
            (interstate export, or the local keep that never leaves the site)
+           Column 1 is SKIPPED by an origin whose collection stops nowhere: the regional
+           lodgement, which happens at a hub, and a transport facility's direct truck, which
+           runs catchment → sorting building in one leg. Column 2 is not "the hubs" — a depot
+           with a sorter runs round 1 for a catchment routed to it, and Melbourne North and
+           Bayswater appear in BOTH columns because they collect their own and sort another's.
 
   CHAIN 2  interstate / Victoria same-day / kept at depot → 1st building → 2nd building
            → delivering depot → delivered
@@ -133,6 +138,24 @@ assert not _orphan, (
     f"outside the model")
 SITE_FACILITY = {c: CODE_SITE[c] for c in SITE_CODES}
 
+# WHICH BUILDING SORTS WHICH ORIGIN IN ROUND 1 — read off the built model, never off the name.
+# `HUB_`/`PUD_` used to stand in for this, and that stopped being true on 2026-09-14 when
+# first_mile_despatch.csv began routing a transport facility's collection straight to a DEPOT
+# with a sorter: Melbourne North and Bayswater now run round 1 for the INNER and DANDENONG_TR
+# catchments while still collecting their own. Keyed by (facility, origin tag) rather than by
+# facility, because that is the distinction the columns turn on — Melbourne North is a first-mile
+# depot for NORTH and a round-1 sort site for INNER, in the same run.
+R1_MAKES = {(r["facilityname"],
+             m.group(1)) for r in csv.DictReader(
+                open(os.path.join(MODEL, "ProductionPolicies.csv"), encoding="utf-8-sig"))
+            for m in [re.match(r"^(?:EP|PP)_(.+)_Despatch1_[^_]+$", r["productname"])] if m}
+_R1_SITES = {f for f, _ in R1_MAKES}
+
+
+def r1_kind(fac):
+    """What to call a round-1 sort site. It is no longer always a hub."""
+    return "round-1 sort · hub" if fac.startswith("HUB_") else "round-1 sort · depot"
+
 
 def nice(n):
     return (n.replace("HUB_", "").replace("PUD_", "")
@@ -251,16 +274,23 @@ def build():
             # Regional lodgement happens AT a hub, so it has no first-mile depot to draw. The
             # ribbon spans column 1, which check_columns already counts towards every column it
             # crosses — the freight is in the diagram, it just took a shorter road.
-            _hub = d.startswith("HUB_")
-            node(c1n, f"C:{m.group(1)}", 0, m.group(1).replace("_", " "),
-                 "lodged at the hub" if _hub else "origin catchment")
-            node(c1n, f"{'H' if _hub else 'P'}:{d}", 2 if _hub else 1, nice(d),
-                 "round-1 hub" if _hub else "first-mile depot")
-            c1l[(f"C:{m.group(1)}", f"{'H' if _hub else 'P'}:{d}", cls, "PICKUP", "arrive")] += q
+            # A round-1 sort site for THIS origin is column 2, wherever the freight came from
+            # and whatever the building is called. Three cases now reach here: the regional
+            # lodgement, which happens at a hub; a transport facility's direct truck, which
+            # stops at no depot at all and delivers to the sorting building; and an ordinary van
+            # catchment arriving at its own depot.
+            _tag = m.group(1)
+            _r1 = (d, _tag) in R1_MAKES
+            node(c1n, f"C:{_tag}", 0, _tag.replace("_", " "),
+                 "lodged at the hub" if _r1 and d.startswith("HUB_") else "origin catchment")
+            node(c1n, f"{'H' if _r1 else 'P'}:{d}", 2 if _r1 else 1, nice(d),
+                 r1_kind(d) if _r1 else "first-mile depot")
+            c1l[(f"C:{_tag}", f"{'H' if _r1 else 'P'}:{d}", cls, "PICKUP", "arrive")] += q
             continue
-        if o.startswith("PUD_") and d.startswith("HUB_") and p.endswith("_Pickup"):
+        _m2 = re.match(r"^(?:EP|PP)_(.+)_Pickup$", p)
+        if o.startswith("PUD_") and _m2 and (d, _m2.group(1)) in R1_MAKES:
             node(c1n, f"P:{o}", 1, nice(o), "first-mile depot")
-            node(c1n, f"H:{d}", 2, nice(d), "round-1 hub")
+            node(c1n, f"H:{d}", 2, nice(d), r1_kind(d))
             c1l[(f"P:{o}", f"H:{d}", cls, "PICKUP", "despatch")] += q
             continue
         # ONE NODE PER BUILDING, not one per family. Chain 1 now terminates its metro volume at
@@ -275,7 +305,7 @@ def build():
             c1l[(f"P:{o}", f"K:{_b}", cls, "LOCAL", "stage")] += q
             continue
         if d.startswith("CZ_Interstate_") and "_INTERSTATE_" not in p:
-            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, f"H:{o}", 2, nice(o), r1_kind(o))
             node(c1n, "X:OUT", 3, "Leaves Melbourne", "sink · interstate export")
             c1l[(f"H:{o}", "X:OUT", cls, "EXPORT", "deliver")] += q
             continue
@@ -283,7 +313,7 @@ def build():
         # the interstate sink does — one node, like interstate and regional, because the split is
         # in the ledger and the destination never moved.
         if d.startswith("CZ_PdoTerm_"):
-            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, f"H:{o}", 2, nice(o), r1_kind(o))
             node(c1n, "P:PDO", 3, "PDO terminate", "sink · metro-bound, handed over at the hub")
             c1l[(f"H:{o}", "P:PDO", cls, "PDOTERM", "deliver")] += q
             continue
@@ -292,13 +322,13 @@ def build():
         # delivery, is not asked to book it a second time.
         if d.startswith("CZ_MetroTerm_"):
             _b = d[len("CZ_MetroTerm_"):]
-            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, f"H:{o}", 2, nice(o), r1_kind(o))
             node(c1n, f"M:{_b}", 3, sink_label(_b, FAM_LABEL["MET"]),
                  "sink · chain 2 collects it here")
             c1l[(f"H:{o}", f"M:{_b}", cls, "METROTERM", "deliver")] += q
             continue
         if d.startswith("CZ_Regional_"):
-            node(c1n, f"H:{o}", 2, nice(o), "round-1 hub")
+            node(c1n, f"H:{o}", 2, nice(o), r1_kind(o))
             # FROM regional Victoria, not to it: this is regional PICKUP, lodged at the hub
             # and terminated there. The model does not follow it any further.
             node(c1n, "R:REG", 3, "Regional pickup", "sink · lodged and ended at the hub")
@@ -616,6 +646,23 @@ def build():
             print(f"  !! {name}: columns do not carry the same volume — "
                   + ", ".join(f"{cols[c]} {tot[c]:,.0f}" for c in sorted(tot))
                   + f"  (spread {span:,.0f} EA)")
+        # AND EVERY INTERIOR NODE MUST PASS ITS FREIGHT ON. The column test above cannot see a
+        # building drawn TWICE — freight arriving on the col-1 copy and leaving from the col-2
+        # copy inflates one column and invents the other by the same amount, so the totals still
+        # match and the diagram still lies. That is not hypothetical: it is how the page drew
+        # 126,408 EA of transport-facility collection for one run in September 2026, and it is
+        # the same defect the docstring above already records once. A node that only receives
+        # belongs in the last column; one that only sends belongs in the first.
+        _last = max(col.values())
+        for n in nodes:
+            i, o = inn[n["id"]], out[n["id"]]
+            c = n["col"]
+            if i > 0.5 and o < 0.5 and c != _last:
+                print(f"  !! {name}: {n['label']} ({cols[c]}) receives {i:,.0f} EA and passes "
+                      f"none of it on — is it drawn twice?")
+            elif o > 0.5 and i < 0.5 and c != 0:
+                print(f"  !! {name}: {n['label']} ({cols[c]}) sends {o:,.0f} EA it never "
+                      f"received — is it drawn twice?")
         return tot
 
     stage_rows = sorted(
@@ -663,7 +710,7 @@ def build():
                 else f"{moved[i] / tot[i]:.0%} a different building"
                 for i in range(len(cols))]
 
-    C1COLS = ["Origin catchment", "First-mile depot", "Round-1 hub", "Terminates"]
+    C1COLS = ["Origin catchment", "First-mile depot", "Round-1 sort", "Terminates"]
     C2COLS = ["Source", "1st building", "2nd building", "Delivering depot", "Delivered"]
     _p1, _p2 = pack(c1n, c1l), pack(c2n, c2l)
     check_columns("chain 1", _p1["nodes"], _p1["links"], C1COLS)
