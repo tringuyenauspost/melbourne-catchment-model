@@ -1,6 +1,7 @@
 """The itinerary page, drawn from ORIGINATING volume — inputs/originating_volume/.
 
-    IN   inputs/originating_volume/MELBOUNRE_ORIGINATING_VOL.csv (one file, every event type)
+    IN   inputs/originating_volume/originating_volume_scan_events.csv (the seven-site merge,
+         every event type, written by utilities/extract_originating_event.py)
     OUT  outputs/originating_volume_analysis/sankey-facility-path-originating.html
 
 The third sibling. `sankey_facility_path.py` holds every rule about what the diagram MEANS — what
@@ -79,7 +80,7 @@ from sankey_facility_path import (
 )
 
 HERE = Path(__file__).resolve().parents[1]
-SRC = HERE / "inputs" / "originating_volume" / "MELBOUNRE_ORIGINATING_VOL.csv"
+SRC = HERE / "inputs" / "originating_volume" / "originating_volume_scan_events.csv"
 OUT = HERE / "outputs" / "originating_volume_analysis"
 TARGET = OUT / "sankey-facility-path-originating.html"
 CACHE = OUT / "originating_rows.pkl"
