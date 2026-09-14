@@ -45,7 +45,7 @@ OUTPUTS = DATA_ROOT / "outputs"
 
 # The named folders, so a rename happens once here rather than in seven scripts.
 RAW = INPUTS / "melbourne"                      # the raw extract and the zone table
-REF = INPUTS / "optilogic"                      # an Anura reference export — COLUMN SCHEMAS
+REF = INPUTS / "optilogic"                      # OPTIONAL Anura reference export — schema check only
 FASS = INPUTS / "factors_assumed"               # hand-managed assumptions
 FOBS = INPUTS / "factors_observed"              # written by s1a — never hand-edit
 SCAN_OUT = OUTPUTS / "melbourne_scan_path_analysis"    # the reduction and its cache

@@ -4,7 +4,8 @@
           inputs/factors_assumed/     the hand-managed assumption tables
           inputs/melbourne/           temp_clustered.csv, cluster_summary.csv, all-data.xlsx,
                                       the first-mile catchment geojson
-          inputs/optilogic/           an Anura reference export — COLUMN SCHEMAS, not data
+          inputs/optilogic/           OPTIONAL. An Anura reference export, kept only to cross-check
+                                      the declared column schemas; the build does not need it.
     OUT   outputs/melbourne_optilogic_chain2_observed/    (21 tables)
 
 Sources -> sort -> delivery. The balance is exact and measured:
@@ -2121,18 +2122,26 @@ for p in STG_PUDS:
 write_csv(pd.DataFrame(pc_rows, columns=PROC_COLS2), "ProcurementPolicies")
 
 # TransportationPolicies  → docs/chain2-observed.md#transportationpolicies
+# THE SCHEMA IS DECLARED HERE, the way chain 1 declares its own (s2b). inputs/optilogic/ is a
+# reference export that is data, not code, so it is not in the repo and a fresh checkout has no
+# copy of it — this table used to be the one place the build died without it. The column list is
+# 28 names and belongs in the code. When the reference IS present it is compared, and a drift is
+# reported rather than silently followed.
+TP_COLS = ["originname", "destinationname", "productname", "modename", "optimizationpolicy",
+    "optimizationpolicyvalue", "status", "unitcost", "unitcostuom", "fixedcost", "fixedcostrule",
+    "averageshipmentsize", "averageshipmentsizeuom", "productnamegroupbehavior", "dutyrate",
+    "inventorycarryingcostpercentage", "transportdistance", "transportdistanceuom", "transporttime",
+    "transporttimeuom", "notes", "fuelsurcharge", "fuelsurchargebasis", "co2emissionrate",
+    "co2emissionrateuom", "routeplannername", "timebetweendeliveries", "timebetweendeliveriesuom"]
 _ref_tp = REF / "TransportationPolicies.csv"
 if _ref_tp.exists():
-    TP_COLS = list(pd.read_csv(_ref_tp, nrows=0).columns)
-else:
-    _prev = OUT / "TransportationPolicies.csv"
-    assert _prev.exists(), (
-        f"no Anura reference at {REF} and no previous output to take the schema from. "
-        f"Restore inputs/optilogic (the reference model export) before rebuilding.")
-    TP_COLS = list(pd.read_csv(_prev, nrows=0).columns)
-    print(f"  WARNING: {REF} is missing — taking the TransportationPolicies column list from the "
-          f"previous output instead. That is schema only, not data, but RESTORE THE REFERENCE "
-          f"FOLDER: static pass-through tables cannot be regenerated without it.")
+    _ref_cols = list(pd.read_csv(_ref_tp, nrows=0).columns)
+    if _ref_cols != TP_COLS:
+        print(f"  WARNING: the Anura reference at {_ref_tp} carries a different column set "
+              f"({len(_ref_cols)} columns against the {len(TP_COLS)} declared here). "
+              f"Only in the reference: {[c for c in _ref_cols if c not in TP_COLS]}; "
+              f"only here: {[c for c in TP_COLS if c not in _ref_cols]}. "
+              f"The schema has moved — update TP_COLS above.")
 _tm = pd.read_csv(FASS / "transport_modes.csv")
 MODE_CAP  = {_r.mode: int(_r.capacity_ea) for _r in _tm.itertuples()}
 MODE_RATE = dict(zip(_tm["mode"], _tm.rate_per_km))
