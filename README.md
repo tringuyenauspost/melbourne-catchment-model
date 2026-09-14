@@ -55,6 +55,7 @@ s3 — POST-PROCESS — in this order, EVERY time s2c runs
     upload outputs/melbourne_optilogic_final/   <- this is the folder Cosmic Frog takes
       |
 8.  drop the solved CSVs into outputs/run_outputs/, then read them back:
+        uv run python utilities/reconcile_run.py                    ASKED vs SOLVED, nine tables, exits 1 on a failure
         uv run python utilities/verify_touch_and_sort.py            every cell of the two tables, with its working
         uv run python plotting/sankey_from_optilogic.py   the same run as a picture
 ```
@@ -403,9 +404,9 @@ model_input_preparation/    BESIDE the build — the vocabulary, and analysis of
 notebooks/                  REFERENCE ONLY — the .ipynb the build scripts were converted from
       melbourne-optilogic-*.ipynb   editing one changes no build
 
-utilities/                  BESIDE the build — ad-hoc only: verify_touch_and_sort.py,
-                            path_census.py, circular_scan_events.py, site_touch_profile.py,
-                            analyse_sort_residual.py, event_hitrate.py
+utilities/                  BESIDE the build — ad-hoc only: reconcile_run.py,
+                            verify_touch_and_sort.py, path_census.py, circular_scan_events.py,
+                            site_touch_profile.py, analyse_sort_residual.py, event_hitrate.py
 
 plotting/                   every script whose output is a PICTURE (2026-08-28)
 docs/                       the long notes, lifted out of the code so the code reads as code
@@ -467,6 +468,7 @@ without the doc open.
 | [analyse_new_scans.py](model_input_preparation/analyse_new_scans.py) | the `new_scan_events/` reduction. `chain_by_time()` is the shared TIME-ordered itinerary; `full_chain` was ordered by `Event_seq` until 2026-08-31, which is a per-event-type index and mis-ordered 82.4% of articles |
 | [plotting/sankey_from_new_scans.py](plotting/sankey_from_new_scans.py) | that extract as a Sankey. `--basis path` (default) draws BUILDINGS TOUCHED with `--depth N` and the exporter's `first_last` cap; `--basis role` is the original first/second/last-sort columns. Each combination writes its own file (`…-path-d3-entry.html`) |
 | [event_hitrate.py](utilities/event_hitrate.py) | scan event coverage |
+| [reconcile_run.py](utilities/reconcile_run.py) | the uploaded model and the solve NEO returned, side by side: balance, demand served, supply drawn, every flow constraint, every user-defined constraint recomputed, work-centre and facility capacity, recipes offered vs chosen, and per-building conservation. `--csv DIR` writes each table; exit 1 if any fails, so it can gate an upload |
 | [verify_touch_and_sort.py](utilities/verify_touch_and_sort.py) | recomputes every cell of the facility-touch and sortation tables from source, printing the filter at each step — nothing copied from the Sankey page, so agreeing with it is evidence rather than restatement |
 | [path_census.py](utilities/path_census.py) → [site_touch_profile.py](utilities/site_touch_profile.py) → [plotting/plot_touch_violin.py](plotting/plot_touch_violin.py) | a standalone chain: journeys per site, then how many buildings each site's freight touched, then the violin plot. Writes `outputs/path_census_sankey/` |
 | [circular_scan_events.py](utilities/circular_scan_events.py) | every scan of every parcel whose journey returns to a building it had already reached |
