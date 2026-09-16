@@ -33,7 +33,11 @@ import json
 import numpy as np
 import pandas as pd
 
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
 from _paths import DATA_ROOT, FASS, FOBS, RAW, SCAN_OUT as OUT   # noqa: E402  (see _paths.py)
+
+log = get_logger(__file__)
 
 HERE = DATA_ROOT                                    # kept: the docstrings and messages name it
 SCAN = RAW / "all_scan_for_melbourne_pdc_20052026.csv"
@@ -41,7 +45,6 @@ CACHE = OUT / "consignment_paths.pkl"
 COVJSON = OUT / "event_coverage.json"    # written beside the cache; needs the raw scan file
 PDCJSON = OUT / "pdc_basis.json"         # what the delivering-depot basis cost, for the diagram
 OUT_PATH = OUT / "full_path.csv"
-DEMAND = RAW / "temp_clustered.csv"      # the model's own demand table, for the reconciliation check
 
 
 # PART 1 — THE REDUCTION. 2.96 M scan events down to one row per…  → docs/export_chain2_factors.md#part-1-the-reduction-2-96
@@ -144,9 +147,8 @@ SORT_CAPABLE_PUDS = frozenset(pud for fac, pud in LODGE_PUD.items() if fac in SO
 VIC_UNPLACED_BAND = "REGION"
 assert VIC_UNPLACED_BAND in ("REGION", "METRO")
 METRO_BOUNDARY = RAW / "first_mile_catchment_dissolved_all.geojson"
-NODES_XLSX = RAW / "all-data.xlsx"                     # the `nodes` sheet — one point per building
 ROUTE_STOPS = RAW / "first_mile_route_stops.geojson"   # 10,606 first-mile pickup points
-SORT_ONLY_CSV = FASS / "sort_only_sites.csv"           # Avalon's point, declared there as ASSUMED
+SITES_CSV = FASS / "sites.csv"                         # Change 51: the site registry, points included
 # A sort site's point. Every OTHER lodgement name resolves through LODGE_PUD, which already knows
 # a depot's three names, so this dictionary is only the buildings that are not depots — plus the
 # three depots that are also sort sites, which cost nothing to name here and make the map total.
@@ -179,20 +181,19 @@ def _lodge_key(s):
 
 
 def _node_points():
-    """Every modelled building's coordinate, keyed by the name the nodes sheet uses.
+    """Every modelled building's coordinate, keyed by its `display` name in the registry.
 
-    all-data.xlsx is the model's own node table and is authoritative for the 15 buildings it
-    carries. Avalon is not one of them — `sort_only_sites.csv` supplies it and flags the point as
-    an ASSUMPTION there, which matters here more than it does anywhere else in the repo: Avalon
-    is the one network facility that falls OUTSIDE the boundary, so 1,921 EA of the region band
-    rests on a coordinate nobody has confirmed.
+    Change 51: one source. This used to read all-data.xlsx for fifteen buildings and patch Avalon
+    in from sort_only_sites.csv, so the two files had to agree about a name for the point to land.
+    sites.csv carries both, and `coord_assumed` carries what the patch used to say in prose —
+    Avalon's point is a GUESS, which matters more here than anywhere else in the repo: it is the
+    one network facility outside the boundary, so 1,921 EA of the region band rests on it.
+
+    A transport facility has no point of its own (it borrows `coord_from`'s) and is absent here —
+    nothing is lodged at one under a name this map has to resolve.
     """
-    n = pd.read_excel(NODES_XLSX, sheet_name="nodes")[["Facility", "lat", "long"]]
-    extra = pd.read_csv(SORT_ONLY_CSV)
-    extra = (extra[extra.lat.notna()][["node_label", "lat", "long"]]
-             .rename(columns={"node_label": "Facility"}))
-    n = pd.concat([n[~n.Facility.isin(extra.Facility)], extra], ignore_index=True)
-    return {r.Facility.upper(): (r.long, r.lat) for r in n.itertuples()}
+    s = pd.read_csv(SITES_CSV)
+    return {r.display.upper(): (r.long, r.lat) for r in s[s.lat.notna()].itertuples()}
 
 
 def _pud_node(points):
@@ -205,7 +206,7 @@ def _pud_node(points):
     for pud in set(LODGE_PUD.values()):
         lab = depot_label(pud).upper()
         hit = [k for k in points if k.startswith(lab)]
-        assert hit, f"no all-data.xlsx node for {pud} — add it, or the depot cannot be placed"
+        assert hit, f"no sites.csv row for {pud} — add it, or the depot cannot be placed"
         out[pud] = sorted(hit, key=len)[0]
     return out
 
@@ -295,27 +296,27 @@ def print_lodge_geography(s, w, unit):
     """
     vic = s.origin == "VIC"
     tot = w[vic].sum()
-    print(f"  lodgement geography: {tot:,} {unit} lodged in Victoria, placed by")
+    log.info(f"  lodgement geography: {tot:,} {unit} lodged in Victoria, placed by")
     for lay in ("node", "stop", "suburb", "unplaced", "no_lodge_scan"):
         m = vic & (s.lodge_geo_from == lay)
         if m.any():
-            print(f"      {lay:<14} {w[m].sum():>9,}  {w[m].sum() / max(tot, 1):>6.1%}"
-                  f"  ({s.lodge_fac[m].nunique():,} facilities)")
+            log.info(f"      {lay:<14} {w[m].sum():>9,}  {w[m].sum() / max(tot, 1):>6.1%}"
+                     f"  ({s.lodge_fac[m].nunique():,} facilities)")
     inside = vic & (s.lodge_metro.fillna(False).astype(bool))
     outside = vic & s.lodge_metro.notna() & ~s.lodge_metro.fillna(True).astype(bool)
     unknown = vic & s.lodge_metro.isna()
-    print(f"    METRO  {w[inside].sum():>9,}  {w[inside].sum() / max(tot, 1):>6.1%}"
-          f"   inside the first-mile boundary — measured")
-    print(f"    REGION {w[outside | unknown].sum():>9,}  "
-          f"{w[outside | unknown].sum() / max(tot, 1):>6.1%}   of which:")
-    print(f"        placed outside {w[outside].sum():>9,}  measured — a point outside the polygon")
-    print(f"        UNPLACEABLE    {w[unknown].sum():>9,}  ASSUMED region "
-          f"(VIC_UNPLACED_BAND={VIC_UNPLACED_BAND!r}); every geocoding layer is metro-only, so "
-          f"this is an upper bound")
+    log.info(f"    METRO  {w[inside].sum():>9,}  {w[inside].sum() / max(tot, 1):>6.1%}"
+             f"   inside the first-mile boundary — measured")
+    log.info(f"    REGION {w[outside | unknown].sum():>9,}  "
+             f"{w[outside | unknown].sum() / max(tot, 1):>6.1%}   of which:")
+    log.info(f"        placed outside {w[outside].sum():>9,}  measured — a point outside the polygon")
+    log.info(f"        UNPLACEABLE    {w[unknown].sum():>9,}  ASSUMED region "
+             f"(VIC_UNPLACED_BAND={VIC_UNPLACED_BAND!r}); every geocoding layer is metro-only, so "
+             f"this is an upper bound")
     top = (w[unknown].groupby(s.lodge_fac[unknown]).sum().sort_values(ascending=False).head(6))
     if len(top):
-        print("          biggest unplaced: "
-              + ", ".join(f"{k} {v:,}" for k, v in top.items()))
+        log.info("          biggest unplaced: "
+                 + ", ".join(f"{k} {v:,}" for k, v in top.items()))
 
 
 PRODUCT_MAP = {"eParcel Express": "EP", "Metro Next Day": "PP", "eParcel Standard": "PP",
@@ -460,72 +461,72 @@ def report_pdc_basis(attr):
     w, tot = attr.articles, attr.articles.sum()
     keep = attr.pdc.notna()
     live = PDC_BASIS == "deliver_scan"
-    print(f"  delivering depot from {PDC_BASIS}: {w[keep].sum():,} of {tot:,} articles kept "
-          f"({w[keep].sum() / tot:.2%})")
+    log.info(f"  delivering depot from {PDC_BASIS}: {w[keep].sum():,} of {tot:,} articles kept "
+             f"({w[keep].sum() / tot:.2%})")
     no_scan = attr.deliver_fac.isna()
     off = attr.deliver_fac.notna() & attr.pdc_deliver.isna()
     lost = no_scan | off
     if PDC_BASIS == "deliver_then_plan":
-        print(f"    {w[~lost].sum():,} articles ({w[~lost].sum() / tot:.2%}) take the depot from "
-              f"their delivery scan; {w[lost].sum():,} ({w[lost].sum() / tot:.2%}) fall back to "
-              f"the plan because the scan names no depot")
+        log.info(f"    {w[~lost].sum():,} articles ({w[~lost].sum() / tot:.2%}) take the depot from "
+                 f"their delivery scan; {w[lost].sum():,} ({w[lost].sum() / tot:.2%}) fall back to "
+                 f"the plan because the scan names no depot")
     if PDC_BASIS == "deliver_then_accept_then_plan":
-        print("    the three-rung ladder (Change 38):")
+        log.info("    the three-rung ladder (Change 38):")
         for rung, lab in (("deliver_scan", "1. last ZPT_DELIVER at one of our depots"),
                           ("accept_scan", f"2. last {ACCEPT_EVENT} at one of our depots"),
                           ("plan", "3. Terminating_facility_name (the plan)")):
             m = attr.pdc_from == rung
-            print(f"      {lab:<48} {w[m].sum():>9,}  {w[m].sum() / tot:>6.2%}")
+            log.info(f"      {lab:<48} {w[m].sum():>9,}  {w[m].sum() / tot:>6.2%}")
         _u = attr.unscanned
         if _u.any():
             _verb = "DROPPED" if DROP_UNSCANNED_DEPOT else "kept on the plan"
-            print(f"      of rung 3, {w[_u].sum():,} EA ({w[_u].sum() / tot:.2%}) have NO depot "
-                  f"scan on either event and no contractor base to explain it — {_verb} "
-                  f"(DROP_UNSCANNED_DEPOT={DROP_UNSCANNED_DEPOT})")
-            print("        by planned depot: " + ", ".join(
+            log.info(f"      of rung 3, {w[_u].sum():,} EA ({w[_u].sum() / tot:.2%}) have NO depot "
+                     f"scan on either event and no contractor base to explain it — {_verb} "
+                     f"(DROP_UNSCANNED_DEPOT={DROP_UNSCANNED_DEPOT})")
+            log.info("        by planned depot: " + ", ".join(
                 f"{depot_label(k)} {v:,}" for k, v in
                 w[_u].groupby(attr.pdc_term[_u]).sum().sort_values(ascending=False).items()))
             _c = attr.pdc_term.isin(CONTRACTOR_BASE) & (attr.pdc_from == "plan") & ~_u
-            print(f"        the other {w[_c].sum():,} EA on rung 3 ARE explained by a contractor "
-                  f"base and are kept: " + ", ".join(
-                      f"{depot_label(a)} via {depot_label(b)}" for a, b in CONTRACTOR_BASE.items()))
+            log.info(f"        the other {w[_c].sum():,} EA on rung 3 ARE explained by a contractor "
+                     f"base and are kept: " + ", ".join(
+                         f"{depot_label(a)} via {depot_label(b)}" for a, b in CONTRACTOR_BASE.items()))
         _a = attr.pdc_from == "accept_scan"
         if _a.any():
             _ag = _a & (attr.pdc_accept == attr.pdc_term)
-            print(f"      the accept rung AGREES with the plan on {w[_ag].sum():,} of its "
-                  f"{w[_a].sum():,} EA ({w[_ag].sum() / max(w[_a].sum(), 1):.1%}) — it only "
-                  f"changes the answer for {w[_a & ~_ag].sum():,}")
+            log.info(f"      the accept rung AGREES with the plan on {w[_ag].sum():,} of its "
+                     f"{w[_a].sum():,} EA ({w[_ag].sum() / max(w[_a].sum(), 1):.1%}) — it only "
+                     f"changes the answer for {w[_a & ~_ag].sum():,}")
             _mv = w[_a & ~_ag].groupby([attr.pdc_term[_a & ~_ag],
                                         attr.pdc_accept[_a & ~_ag]]).sum().sort_values(
                                             ascending=False).head(3)
             if len(_mv):
-                print("      top moves it makes: " + ", ".join(
+                log.info("      top moves it makes: " + ", ".join(
                     f"{depot_label(a)}->{depot_label(b)} {v:,}" for (a, b), v in _mv.items()))
-    print(f"    the deliver-scan basis {'drops' if live else 'WOULD drop'} "
-          f"{w[lost].sum():,} articles ({w[lost].sum() / tot:.2%}): "
-          f"{w[no_scan].sum():,} with no ZPT_DELIVER scan anywhere, "
-          f"{w[off].sum():,} delivered from a site that is not one of the {len(MODEL_PDCS)} "
-          f"depots ({attr.deliver_fac[off].nunique()} distinct names)")
-    print(f"    that volume, by the depot it is planned for: " + ", ".join(
+    log.info(f"    the deliver-scan basis {'drops' if live else 'WOULD drop'} "
+             f"{w[lost].sum():,} articles ({w[lost].sum() / tot:.2%}): "
+             f"{w[no_scan].sum():,} with no ZPT_DELIVER scan anywhere, "
+             f"{w[off].sum():,} delivered from a site that is not one of the {len(MODEL_PDCS)} "
+             f"depots ({attr.deliver_fac[off].nunique()} distinct names)")
+    log.info(f"    that volume, by the depot it is planned for: " + ", ".join(
         f"{depot_label(k)} {v:,}" for k, v in
         w[lost].groupby(attr.pdc_term[lost]).sum().sort_values(ascending=False).items()))
     disagree = ~lost & (attr.pdc_deliver != attr.pdc_term)
     contractor = disagree & (attr.pdc_deliver == attr.pdc_term.map(CONTRACTOR_BASE))
     moved = disagree & ~contractor
-    print(f"    the scan disagrees with the plan on {w[disagree].sum():,} articles "
-          f"({w[disagree].sum() / tot:.2%}); {w[contractor].sum():,} of that is a depot's own "
-          f"contractor base and is NOT a reassignment ("
-          + ", ".join(f"{depot_label(a)} via {depot_label(b)}"
-                      for a, b in CONTRACTOR_BASE.items()) + ")")
-    print(f"    net {w[moved].sum():,} articles ({w[moved].sum() / tot:.2%}) actually change "
-          f"depot; top moves: " + (", ".join(
+    log.info(f"    the scan disagrees with the plan on {w[disagree].sum():,} articles "
+             f"({w[disagree].sum() / tot:.2%}); {w[contractor].sum():,} of that is a depot's own "
+             f"contractor base and is NOT a reassignment ("
+             + ", ".join(f"{depot_label(a)} via {depot_label(b)}"
+                         for a, b in CONTRACTOR_BASE.items()) + ")")
+    log.info(f"    net {w[moved].sum():,} articles ({w[moved].sum() / tot:.2%}) actually change "
+             f"depot; top moves: " + (", ".join(
         f"{depot_label(a)}->{depot_label(b)} {v:,}" for (a, b), v in
         w[moved].groupby([attr.pdc_term[moved], attr.pdc_deliver[moved]]).sum()
-                .sort_values(ascending=False).head(3).items()) or "none"))
+                   .sort_values(ascending=False).head(3).items()) or "none"))
     gone = sorted(set(MODEL_PDCS) - set(attr.pdc_deliver.dropna()))
     for g in gone:
         held = CONTRACTOR_BASE.get(g)
-        print(f"    ⚠ no delivery scan EVER names {depot_label(g)}" + (
+        log.info(f"    ⚠ no delivery scan EVER names {depot_label(g)}" + (
             f" — its rounds are closed under {depot_label(held)}, where its contractor is "
             f"registered, so CONTRACTOR_BASE keeps its {w[attr.pdc == g].sum():,} articles "
             f"with it and counts that building as its own"
@@ -686,7 +687,7 @@ def facility_state(df=None, rebuild=False):
     if STATE_JSON.exists() and not rebuild:
         return json.loads(STATE_JSON.read_text())
     if df is None:
-        print(f"  reading states off {SCAN.name} (once; cached to {STATE_JSON.name})")
+        log.info(f"  reading states off {SCAN.name} (once; cached to {STATE_JSON.name})")
         df = pd.read_csv(SCAN, usecols=["Event_facility_name", "STE_NAME21"], dtype=str)
     g = (df[df.Event_facility_name.notna()].groupby("Event_facility_name").STE_NAME21
           .agg(lambda s: s.dropna().mode().iat[0] if s.notna().any() else None).dropna())
@@ -848,27 +849,27 @@ def itinerary(df, identity, index, articles=None):
         "path_fell", "path_why"])
 
     tot = w.sum()
-    print(f"  path 0d: {PATH_TOUCH_BAR.upper()} bar — "
-          + ", ".join(e.replace("ZPT_", "") for e in EVIDENCE[PATH_TOUCH_BAR]))
-    print(f"    {len(folds)} buildings answer to more than one scan name; "
-          f"{w[p.path_merged > 0].sum():,} {unit} were scanned under two names of one building")
+    log.info(f"  path 0d: {PATH_TOUCH_BAR.upper()} bar — "
+             + ", ".join(e.replace("ZPT_", "") for e in EVIDENCE[PATH_TOUCH_BAR]))
+    log.info(f"    {len(folds)} buildings answer to more than one scan name; "
+             f"{w[p.path_merged > 0].sum():,} {unit} were scanned under two names of one building")
     _n = p.path_n.clip(upper=PATH_DEPTH + 1)
-    print("    buildings of ours touched before the depot — " + "  ".join(
+    log.info("    buildings of ours touched before the depot — " + "  ".join(
         f"{k}{'+' if k == PATH_DEPTH + 1 else ''} {w[_n == k].sum() / tot:5.1%}"
         for k in range(PATH_DEPTH + 2))
         + f"  (mean {(p.path_n * w).sum() / tot:.2f})")
     _z = p.path_why != "path"
     if _z.any():
-        print(f"    {w[_z].sum():,} {unit} ({w[_z].sum() / tot:.1%}) have no path at all: "
-              + ", ".join(f"{r} {w[p.path_why == r].sum():,}"
-                          for r in p.path_why[_z].value_counts().index))
-    print(f"    cut from the journey: {w[p.path_before > 0].sum():,} {unit} arrived through "
-          f"another state, {w[p.path_after > 0].sum():,} were seen somewhere after their depot, "
-          f"{w[p.path_fell > 0].sum():,} passed a building the model does not carry")
+        log.info(f"    {w[_z].sum():,} {unit} ({w[_z].sum() / tot:.1%}) have no path at all: "
+                 + ", ".join(f"{r} {w[p.path_why == r].sum():,}"
+                             for r in p.path_why[_z].value_counts().index))
+    log.info(f"    cut from the journey: {w[p.path_before > 0].sum():,} {unit} arrived through "
+             f"another state, {w[p.path_after > 0].sum():,} were seen somewhere after their depot, "
+             f"{w[p.path_fell > 0].sum():,} passed a building the model does not carry")
     if (p.path_interior > 0).any():
-        print(f"    PATH_DEPTH={PATH_DEPTH} ({PATH_CAP_RULE}) folds "
-              f"{(p.path_interior * w).sum():,} interior touches out of "
-              f"{w[p.path_interior > 0].sum():,} {unit}")
+        log.info(f"    PATH_DEPTH={PATH_DEPTH} ({PATH_CAP_RULE}) folds "
+                 f"{(p.path_interior * w).sum():,} interior touches out of "
+                 f"{w[p.path_interior > 0].sum():,} {unit}")
     return p
 
 
@@ -899,19 +900,19 @@ def source(df, fc, index, articles=None):
     w = pd.Series(1, index=index) if articles is None else articles.reindex(index)
     unit = "consignments" if articles is None else "articles"
     gap = s.index[s.lodge_state.isna()]                          # rule 1 had nothing to say
-    print(f"  origin: rule 1 (lodge scan) answers {w[s.lodge_state.notna()].sum():,} {unit} "
-          f"({w[s.lodge_state.notna()].sum() / w.sum():.2%}); {len(gap):,} consignments fall to "
-          f"rule 2 and it reads the state off:")
+    log.info(f"  origin: rule 1 (lodge scan) answers {w[s.lodge_state.notna()].sum():,} {unit} "
+             f"({w[s.lodge_state.notna()].sum() / w.sum():.2%}); {len(gap):,} consignments fall to "
+             f"rule 2 and it reads the state off:")
     by_ev = (w.reindex(gap).groupby(supplier.reindex(gap)).sum()
               .sort_values(ascending=False))
     for ev, v in by_ev.items():
-        print(f"      {ev.replace('ZPT_', ''):18s} {v:8,} {unit}  {v / w[gap].sum():6.2%} "
-              f"of the gap")
+        log.info(f"      {ev.replace('ZPT_', ''):18s} {v:8,} {unit}  {v / w[gap].sum():6.2%} "
+                 f"of the gap")
     dead = s.index[s.origin_from == "none"]
-    print(f"    BOTH RULES FAIL on {len(dead):,} consignments ({w.reindex(dead).sum():,} {unit}, "
-          f"{w.reindex(dead).sum() / w.sum():.4%}) — no lodge scan, and no state on any of "
-          + "/".join(e.replace("ZPT_", "") for e in ORIGIN_FALLBACK_EVENTS)
-          + ". Tagged origin=UNKNOWN; export_chain2_factors.cohort() drops them.")
+    log.info(f"    BOTH RULES FAIL on {len(dead):,} consignments ({w.reindex(dead).sum():,} {unit}, "
+             f"{w.reindex(dead).sum() / w.sum():.4%}) — no lodge scan, and no state on any of "
+             + "/".join(e.replace("ZPT_", "") for e in ORIGIN_FALLBACK_EVENTS)
+             + ". Tagged origin=UNKNOWN; export_chain2_factors.cohort() drops them.")
 
     # ── METRO or REGIONAL — asked only of Victorian freight, and only after the state ──
     # Order matters and is the whole rule: interstate is decided above, off the STATE, exactly as
@@ -982,16 +983,16 @@ def sortation(df, index, articles=None):
     s["sorted_elsewhere"] = s.index.isin(elsewhere)
 
     _n = s.nrounds.clip(upper=3)
-    print("  sort 2a: Melbourne sorts per parcel — " + "  ".join(
+    log.info("  sort 2a: Melbourne sorts per parcel — " + "  ".join(
         f"{k}{'+' if k == 3 else ''} sorts {vol(_n == k) / tot:5.1%}" for k in range(4)))
     _none = s.nrounds == 0
     # sites, not names: SORT_SITE holds several aliases per building (Holloway Dr is Bayswater)
-    print(f"    of the {vol(_none):,} {unit} with no sort at our "
-          f"{len(set(SORT_SITE.values()))} sites, "
-          f"{vol(_none & s.sorted_elsewhere):,} were machine-sorted SOMEWHERE ELSE "
-          f"(mostly interstate); the rest carry no machine sort anywhere")
+    log.info(f"    of the {vol(_none):,} {unit} with no sort at our "
+             f"{len(set(SORT_SITE.values()))} sites, "
+             f"{vol(_none & s.sorted_elsewhere):,} were machine-sorted SOMEWHERE ELSE "
+             f"(mostly interstate); the rest carry no machine sort anywhere")
     _sorted = s.nrounds > 0
-    print("    first sort site: " + ", ".join(
+    log.info("    first sort site: " + ", ".join(
         f"{k} {v / vol(_sorted):.1%}" for k, v in
         w[_sorted].groupby(s["first"][_sorted]).sum().sort_values(ascending=False).items()))
 
@@ -1002,21 +1003,21 @@ def sortation(df, index, articles=None):
     s["crossdocked"] = s.received.notna() & s.sort_site.notna() & (s.received != s.sort_site)
 
     _folded = earlier & s.recv_site.notna() & s.sort_site.notna() & (s.recv_site != s.sort_site)
-    print(f"  sort 2b: cross-dock {vol(s.crossdocked):,} {unit} "
-          f"({vol(s.crossdocked) / tot:.1%}) — handled at one site, sorted at another")
-    print("    top lanes: " + ", ".join(
+    log.info(f"  sort 2b: cross-dock {vol(s.crossdocked):,} {unit} "
+             f"({vol(s.crossdocked) / tot:.1%}) — handled at one site, sorted at another")
+    log.info("    top lanes: " + ", ".join(
         f"{a}->{b} {v:,}" for (a, b), v in
         w[s.crossdocked].groupby([s.received[s.crossdocked], s.sort_site[s.crossdocked]])
          .sum().sort_values(ascending=False).head(4).items()))
-    print(f"    receipt-before-sort guard folded {vol(_folded):,} {unit} onto the diagonal"
-          + ("  (it never fires on this extract: `recv` is the FIRST handled scan at any sort "
+    log.info(f"    receipt-before-sort guard folded {vol(_folded):,} {unit} onto the diagonal"
+             + ("  (it never fires on this extract: `recv` is the FIRST handled scan at any sort "
              "site, so it cannot post-date the sort — the guard is defensive, not load-bearing)"
              if vol(_folded) == 0 else "  — touched by another building, but not before the sort"))
 
     # ── 2c — was a hub involved before any sort ───────────────────────────────────────
     s["hub_first"] = s.hub_seq.notna() & s.sort_seq.notna() & (s.hub_seq < s.sort_seq)
-    print(f"  sort 2c: a hub {list(MODEL_HUBS)} handled it before any sort for "
-          f"{vol(s.hub_first):,} {unit} ({vol(s.hub_first) / tot:.1%})")
+    log.info(f"  sort 2c: a hub {list(MODEL_HUBS)} handled it before any sort for "
+             f"{vol(s.hub_first):,} {unit} ({vol(s.hub_first) / tot:.1%})")
     return s
 
 
@@ -1036,19 +1037,19 @@ def delivery(df, identity, src, index):
         src.lodge_band == "METRO",
         np.where(d.kept_on_site, "KEPT_METRO", "METRO"), src.lodge_band)
     w, tot = identity.articles, identity.articles.sum()
-    print("  source bands (articles, every delivery date in the file):")
+    log.info("  source bands (articles, every delivery date in the file):")
     for b in ("INT", "METRO", "KEPT_METRO", "REGION", "UNKNOWN"):
         m = d.source_band == b
         if m.any():
-            print(f"    {b:<11} {w[m].sum():>9,}  {w[m].sum() / tot:>6.1%}")
+            log.info(f"    {b:<11} {w[m].sum():>9,}  {w[m].sum() / tot:>6.1%}")
     k = d.kept_on_site
     if w[k].sum():
         # the whole stage, not the band — the two are no longer the same pile, and the gap is
         # exactly the interstate and regional stock that now bands with its lodgement instead
-        print(f"    kept at depot in total {w[k].sum():,} ({w[k].sum() / tot:.1%}), of which "
-              + ", ".join(f"{b} {w[k & (src.lodge_band == b)].sum() / w[k].sum():.1%}"
-                          for b in ("INT", "METRO", "REGION"))
-              + f" — only the METRO slice is drawn as a source band")
+        log.info(f"    kept at depot in total {w[k].sum():,} ({w[k].sum() / tot:.1%}), of which "
+                 + ", ".join(f"{b} {w[k & (src.lodge_band == b)].sum() / w[k].sum():.1%}"
+                             for b in ("INT", "METRO", "REGION"))
+                 + f" — only the METRO slice is drawn as a source band")
         print_kept_duration(d, identity.articles, src.lodge_band)
     return d
 
@@ -1200,30 +1201,30 @@ def compute_kept_on_site(df, p, articles=None, pdc=None):
     unit = "consignments" if articles is None else "articles"
     share = lambda m, sub=None: w[m & (True if sub is None else sub)].sum() / w[
         slice(None) if sub is None else sub].sum()
-    print(f"  kept on site: {w[kept].sum():,} {unit} were STANDING at the delivering depot "
-          f"before the delivery date (final-stay rule"
-          + (", and sorted there before it at the depots that have a sorter)"
+    log.info(f"  kept on site: {w[kept].sum():,} {unit} were STANDING at the delivering depot "
+             f"before the delivery date (final-stay rule"
+             + (", and sorted there before it at the depots that have a sorter)"
              if KEPT_REQUIRE_SORT else ")"))
     _lag = (delivered.dt.date - sorted_at.dt.date).map(
         lambda x: x.days if pd.notna(x) else np.nan)
-    print(f"    the arrival test alone passes {w[stood].sum():,} {unit} ({share(stood):.1%}); "
-          f"the sort condition is asked of {', '.join(sorted(depot_label(x) for x in SORT_CAPABLE_PUDS))} "
-          f"and removes {w[stood & asked & ~sorted_before].sum():,} of it — "
-          f"{w[stood & asked & sorted_at.notna() & ~sorted_before].sum():,} sorted at the depot "
-          f"only on the delivery day itself, {w[stood & asked & sorted_at.isna()].sum():,} carry "
-          f"no own-depot machine sort inside the final stay at all")
-    print(f"    the other {len(MODEL_PDCS) - len(SORT_CAPABLE_PUDS)} depots have no sorter, so "
-          f"the condition is not asked of them and their {w[stood & ~asked].sum():,} {unit} "
-          f"stand on the arrival test alone")
-    print("    days from the depot's own sort to the delivery, where there is a sorter: "
-          + ", ".join(f"{int(d)}d {w[stood & asked & (_lag == d)].sum():,}"
-                      for d in sorted(_lag[stood & asked].dropna().unique())[:5])
-          + f", no sort {w[stood & asked & _lag.isna()].sum():,}")
-    print(f"    on the extract's delivery day ({peak}): {share(kept, on_peak):.1%}"
-          f"   |   pooled over all delivery dates: {share(kept):.1%}")
-    print(f"    the superseded 'first touch at the depot' rule gave {share(was, on_peak):.1%} / "
-          f"{share(was):.1%}; the difference is {w[was & ~kept].sum():,} {unit} that touched the "
-          f"depot, left for a hub or interstate, and came back on delivery day")
+    log.info(f"    the arrival test alone passes {w[stood].sum():,} {unit} ({share(stood):.1%}); "
+             f"the sort condition is asked of {', '.join(sorted(depot_label(x) for x in SORT_CAPABLE_PUDS))} "
+             f"and removes {w[stood & asked & ~sorted_before].sum():,} of it — "
+             f"{w[stood & asked & sorted_at.notna() & ~sorted_before].sum():,} sorted at the depot "
+             f"only on the delivery day itself, {w[stood & asked & sorted_at.isna()].sum():,} carry "
+             f"no own-depot machine sort inside the final stay at all")
+    log.info(f"    the other {len(MODEL_PDCS) - len(SORT_CAPABLE_PUDS)} depots have no sorter, so "
+             f"the condition is not asked of them and their {w[stood & ~asked].sum():,} {unit} "
+             f"stand on the arrival test alone")
+    log.info("    days from the depot's own sort to the delivery, where there is a sorter: "
+             + ", ".join(f"{int(d)}d {w[stood & asked & (_lag == d)].sum():,}"
+                         for d in sorted(_lag[stood & asked].dropna().unique())[:5])
+             + f", no sort {w[stood & asked & _lag.isna()].sum():,}")
+    log.info(f"    on the extract's delivery day ({peak}): {share(kept, on_peak):.1%}"
+             f"   |   pooled over all delivery dates: {share(kept):.1%}")
+    log.info(f"    the superseded 'first touch at the depot' rule gave {share(was, on_peak):.1%} / "
+             f"{share(was):.1%}; the difference is {w[was & ~kept].sum():,} {unit} that touched the "
+             f"depot, left for a hub or interstate, and came back on delivery day")
     return kept, sorted_before, delivered.dt.date, hours, on_peak
 
 
@@ -1250,17 +1251,17 @@ def print_kept_duration(d, articles, lodge_band):
         v = w[m].sum()
         return f"{v:>7,} {v / max(w[col].sum(), 1):>6.1%}" if v else f"{'—':>7}{'':>7}"
 
-    print("  kept at depot — hours from the last arrival scan to the delivery scan:")
-    print(f"    {'hours':<12}" + "".join(f"{lab:^16}" for lab, _ in cols))
+    log.info("  kept at depot — hours from the last arrival scan to the delivery scan:")
+    log.info(f"    {'hours':<12}" + "".join(f"{lab:^16}" for lab, _ in cols))
     for lo, hi in KEPT_BINS:
         band = (h >= lo) & (h < hi) if hi else (h >= lo)
         if not any((band & c).any() for _, c in cols):
             continue
         label = f"{lo} – {hi}" if hi else f"{lo}+"
-        print(f"    {label:<12}" + "".join(f"  {cell(band & c, c)}" for _, c in cols))
-    print(f"    {'median':<12}"
-          + "".join(f"  {h[c].median():>7.1f}h{'':>6}" for _, c in cols))
-    print(f"    {'under 24h':<12}" + "".join(f"  {cell((h < 24) & c, c)}" for _, c in cols))
+        log.info(f"    {label:<12}" + "".join(f"  {cell(band & c, c)}" for _, c in cols))
+    log.info(f"    {'median':<12}"
+             + "".join(f"  {h[c].median():>7.1f}h{'':>6}" for _, c in cols))
+    log.info(f"    {'under 24h':<12}" + "".join(f"  {cell((h < 24) & c, c)}" for _, c in cols))
 
 
 STATE_ABBR = {"Victoria": "VIC", "New South Wales": "NSW", "Queensland": "QLD",
@@ -1291,17 +1292,17 @@ def print_state_summary(p):
                 f"{s[s['first'].isin(MODEL_HUBS)].articles.sum() / max(s.articles.sum(), 1):>7.0%}"
                 f"{d[d.crossdocked].articles.sum() / a:>8.1%}   {top}")
 
-    print("  the day by LODGEMENT STATE  (kept % is of that state; % stage is of the whole stage)")
-    print(f"  {'lodged':<7}{'articles':>10}{'% day':>8}{'kept EA':>10}{'kept %':>8}{'% stage':>9}"
-          f"{'med h':>7}{'sorts':>9}{'hub%':>7}{'xdock%':>8}   first sort")
+    log.info("  the day by LODGEMENT STATE  (kept % is of that state; % stage is of the whole stage)")
+    log.info(f"  {'lodged':<7}{'articles':>10}{'% day':>8}{'kept EA':>10}{'kept %':>8}{'% stage':>9}"
+             f"{'med h':>7}{'sorts':>9}{'hub%':>7}{'xdock%':>8}   first sort")
     for st in sorted(set(q.state), key=lambda s: -w[q.state == s].sum()):
-        print(row(STATE_ABBR.get(st, st), q[q.state == st]))
-    print("  " + "─" * 84)
+        log.info(row(STATE_ABBR.get(st, st), q[q.state == st]))
+    log.info("  " + "─" * 84)
     # the two bands the model actually carries, then the whole file — VIC + REST is 167,443,
     # two short of ALL, and those two are the `?` row above
     for lab, m in (("VIC", q.origin == "VIC"), ("REST", q.origin == "INTERSTATE"),
                    ("ALL", pd.Series(True, index=q.index))):
-        print(row(lab, q[m]))
+        log.info(row(lab, q[m]))
 
 
 def load_paths(rebuild=False):
@@ -1317,7 +1318,7 @@ def load_paths(rebuild=False):
              "pdc_accept", "pdc_from",
              "path_sites", "path_n", "path_interior", "path_why"} <= set(p.columns):
             return p
-        print("  cache is missing columns this script needs — rebuilding")
+        log.info("  cache is missing columns this script needs — rebuilding")
     OUT.mkdir(parents=True, exist_ok=True)
     p = build_paths()
     p.to_csv(OUT_PATH, index=False)
@@ -1407,11 +1408,11 @@ def cohort(p, basis=None):
         # balances inside each table and is wrong between them.
         if _a.any() and not getattr(cohort, "_said", False):
             cohort._said = True
-            print(f"  cohort: dropping {q.articles[_a].sum():,} articles "
-                  f"({q.articles[_a].sum() / q.articles.sum():.2%}) whose entry site is ASSUMED "
-                  f"— no sort and no handling scan at any modelled site "
-                  f"(DROP_UNPLACED_ENTRY=True); the {q.articles[q.entry_from == 'handled'].sum():,} "
-                  f"placed by a handling scan are KEPT")
+            log.info(f"  cohort: dropping {q.articles[_a].sum():,} articles "
+                     f"({q.articles[_a].sum() / q.articles.sum():.2%}) whose entry site is ASSUMED "
+                     f"— no sort and no handling scan at any modelled site "
+                     f"(DROP_UNPLACED_ENTRY=True); the {q.articles[q.entry_from == 'handled'].sum():,} "
+                     f"placed by a handling scan are KEPT")
         q = q[~_a].copy()
     # Change 37: the family IS the source band. Four of them, and the one that is not a
     # lodgement place — METRO_DEPOT, yesterday's metro stock — is the only one that bypasses the
@@ -1740,7 +1741,7 @@ def main(argv=None):
     def w(rows, name, cols):
         df = pd.DataFrame(rows, columns=cols)
         df.to_csv(FOBS / f"{name}.csv", index=False)
-        print(f"  ✓ {name + '.csv':<24} {len(df):>4} rows")
+        log.info(f"  ✓ {name + '.csv':<24} {len(df):>4} rows")
 
     # the joint's articles and the demand table are the SAME cohort counted two ways; if they
     # ever disagree a filter has run on one and not the other (Change 41 did exactly that)
@@ -1762,13 +1763,19 @@ def main(argv=None):
         for _old in ("obs_recv_entry", "obs_round2"):
             if (FOBS / f"{_old}.csv").exists():
                 (FOBS / f"{_old}.csv").unlink()
-                print(f"  ✗ {_old + '.csv':<24} removed — merged into obs_legs.csv")
+                log.info(f"  ✗ {_old + '.csv':<24} removed — merged into obs_legs.csv")
     else:
         w(xd_f, "obs_recv_entry", ["cls", "recv", "entry", "articles", "share_of_recv"])
         w(r2_f, "obs_round2", ["family", "cls", "entry", "dest", "articles", "share_of_entry"])
     w(dl_f, "obs_delivery", ["cls", "exit", "pud", "articles", "share_of_exit"])
     w(single_f, "obs_single_sort", ["family", "cls", "site", "single_share", "articles"])
     w(r2, "obs_round2_sites", ["site", "share", "articles"])
+    # THE ONE MEASUREMENT THAT USED TO LIVE IN _provenance.csv. It is a FACTOR — s2a reads it and
+    # scales the round-2 handling cost by it — and a factor the build consumes does not belong in
+    # a file whose job is to say how the export was made. `basis` is keyed on the values
+    # ROUND2_COST_BASIS takes, so the notebook indexes this table with the dial directly.
+    w([(b, meta[f"sort_2plus_{b}"]) for b in ("cohort", "same_day")],
+      "obs_second_sort", ["basis", "articles"])
     _pn = p.reindex(cohort(p).index)
     prov = [("source_scan_csv", SCAN.name),
             ("path_basis", PATH_BASIS),
@@ -1807,35 +1814,53 @@ def main(argv=None):
             ("measured_delivery_ea", sum(a for _, _, a in demand)),
             ("vic_crossdock_folded_ea", vic_xd),
             ("dropped_family_class_sites", "; ".join("/".join(k) for k in dead) or "none"),
-            *meta.items()]
+            # THE SPLAT IS FILTERED NOW. `_provenance.csv` is a record of how this export was
+            # made — read by people, echoed in the build log, consumed by nothing. Every value
+            # the BUILD reads as a number belongs in an obs_*.csv beside the other factors, and
+            # `sort_2plus_*` was the only one still on the wrong side of that line: s2a scaled
+            # round-2 handling cost by it. It is obs_second_sort.csv above. Carrying it in both
+            # places would be worse than either, because then there are two of it.
+            *((k, v) for k, v in meta.items() if not k.startswith("sort_2plus_")),
+            ("second_sort_measured_in", "obs_second_sort.csv")]
     w(prov, "_provenance", ["key", "value"])
 
-    print(f"  fold at {dials['fold']:,} EA: {moved:,} EA "
-          f"({100 * moved / meta['cohort_articles']:.2f}% of the cohort) folded into "
-          f"surviving cells")
+    log.info(f"  fold at {dials['fold']:,} EA: {moved:,} EA "
+             f"({100 * moved / meta['cohort_articles']:.2f}% of the cohort) folded into "
+             f"surviving cells")
     if dead:
-        print(f"  dropped family/class/site flavours: {', '.join('/'.join(k) for k in dead)}")
-    print(f"  round-2 sites (share >= {dials['r2_min']:.0%}): "
-          + ", ".join(f"{s} {sh:.0%}" for s, sh, _ in r2)
-          + f"  — the other {len(second) - len(r2)} observed sites carry "
-          f"{100 * (1 - sum(sh for _, sh, _ in r2)):.0f}% of second sorts and are not offered")
+        log.info(f"  dropped family/class/site flavours: {', '.join('/'.join(k) for k in dead)}")
+    log.info(f"  round-2 sites (share >= {dials['r2_min']:.0%}): "
+             + ", ".join(f"{s} {sh:.0%}" for s, sh, _ in r2)
+             + f"  — the other {len(second) - len(r2)} observed sites carry "
+             f"{100 * (1 - sum(sh for _, sh, _ in r2)):.0f}% of second sorts and are not offered")
     _lm = sum(lane_moved.values())
     _path = PATH_BASIS == "facility_path"
-    print(f"  lanes after the {dials['fold']:,} EA fold: "
-          + (f"legs {len(r2_f)}, despatch {len(dl_f)}" if _path
+    log.info(f"  lanes after the {dials['fold']:,} EA fold: "
+             + (f"legs {len(r2_f)}, despatch {len(dl_f)}" if _path
              else f"stage2 {len(xd_f)}, stage3 {len(r2_f)}, stage4 {len(dl_f)}")
-          + f" — {_lm:,} EA ({100 * _lm / meta['cohort_articles']:.2f}%) refolded "
-          + ("(a dropped leg onto ONE BUILDING, a dropped despatch onto the surviving depots)"
+             + f" — {_lm:,} EA ({100 * _lm / meta['cohort_articles']:.2f}%) refolded "
+             + ("(a dropped leg onto ONE BUILDING, a dropped despatch onto the surviving depots)"
              if _path else "(stage 2 onto the no-cross-dock diagonal, stage 3 onto sorted-once, "
-                           "stage 4 onto the surviving depots)"))
+                              "stage 4 onto the surviving depots)"))
     _rep_kept = sum(a for _f, _c, _e, d, a, _s in r2_f if d != "ONCE")
     _rep_all = sum(a for _f, _c, _e, d, a in legs if d != "ONCE")
     _word = "a second building" if _path else "a second sort"
-    print(f"  {_word}: {_rep_kept:,} EA of the measured {_rep_all:,} EA keeps it; "
-          f"the rest is modelled as finishing at the building it entered")
-    print(f"  cohort '{meta['cohort']}' (modal delivery date {meta['peak_day']}), "
-          f"{meta['cohort_articles']:,} articles; "
-          f"measured delivery {sum(a for _, _, a in demand):,} EA is what the model now carries")
+    log.info(f"  {_word}: {_rep_kept:,} EA of the measured {_rep_all:,} EA keeps it; "
+             f"the rest is modelled as finishing at the building it entered")
+    log.info(f"  cohort '{meta['cohort']}' (modal delivery date {meta['peak_day']}), "
+             f"{meta['cohort_articles']:,} articles; "
+             f"measured delivery {sum(a for _, _, a in demand):,} EA is what the model now carries")
+
+    # The phase report card. Everything above is the commentary the build makes as it decides
+    # things; this is the answer to "what does the measurement say", in one block, in the same
+    # shape the scan Sankeys print it. It lives in _report.py so this file stays a builder.
+    # `raw` is the UNFILTERED measurement. The report re-runs filter_factors and filter_stages
+    # over it at every threshold the dial could hold, which is how the fold section says what
+    # FOLD_MIN_ARTICLES costs rather than only what it did. Both filters are pure, so this is
+    # safe to re-run and cannot disturb what was just written.
+    _report.s1a(p, prov, meta, demand, log=log,
+                raw=dict(joint=joint, single=single, second=second, recv_entry=recv_entry,
+                         legs=legs, deliver_rows=deliver_rows, dials=dials))
 
 
 if __name__ == "__main__":

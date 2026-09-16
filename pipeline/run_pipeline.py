@@ -38,14 +38,29 @@ Run:  uv run python pipeline/run_pipeline.py                 the whole build
       uv run python pipeline/run_pipeline.py --only s3a s3b s3c   just re-apply the patches
       uv run python pipeline/run_pipeline.py --band 0.05     restore the original sort band
       uv run python pipeline/run_pipeline.py --dry-run       print the commands and stop
+
+WHAT THE BUILD SAYS, AND HOW TO CHANGE IT. Every message in every step goes through `_log.py`,
+and every step ends with a REPORT CARD from `_report.py` — the scan extract and the itinerary
+distribution for s1a, the ledger for each entity, the rule set for each patch. Three environment
+variables steer the output, and they reach the child processes because they are inherited:
+
+      MELB_LOG_FILE=build.log     also append a timestamped copy there
+      MELB_LOG_STYLE=stamped      put the clock and the step on every console line
+      MELB_LOG_LEVEL=WARNING      a silent build; only real problems
+
+This is also why the transcript is now in the right ORDER when you redirect it. The runner's
+banners used to be block-buffered while the children's output was not, so `> build.txt` put
+every step's output ABOVE the banner naming the step. A logging handler flushes per record.
 """
 import argparse
 import subprocess
 import sys
 import time
-from pathlib import Path
 
+from _log import get_logger      # every message in the build goes through here
 from _paths import DATA_ROOT, HOW, PIPELINE
+
+log = get_logger(__file__)
 
 # (id, script, what it does, the folder it owns)
 STEPS = [
@@ -108,55 +123,55 @@ def main(argv=None):
     else:
         plan = list(STEPS)
 
-    print(f"pipeline   {PIPELINE}")
-    print(f"data root  {DATA_ROOT}      ({HOW})")
-    print(f"plan       {' -> '.join(i for i, *_ in plan)}"
-          + ("   (--rebuild: s1a re-reads the raw scans)" if args.rebuild else ""))
+    log.info(f"pipeline   {PIPELINE}")
+    log.info(f"data root  {DATA_ROOT}      ({HOW})")
+    log.info(f"plan       {' -> '.join(i for i, *_ in plan)}"
+             + ("   (--rebuild: s1a re-reads the raw scans)" if args.rebuild else ""))
     planned = {i for i, *_ in plan}
     if (planned - set(PATCHES)) and not set(PATCHES) <= planned:
-        print("  NOTE: this plan rebuilds the model folder without re-applying every patch. "
-              "s2c drops all three, so finish with --only s3a s3b s3c.")
+        log.info("  NOTE: this plan rebuilds the model folder without re-applying every patch. "
+                 "s2c drops all three, so finish with --only s3a s3b s3c.")
 
     t0 = time.time()
     for step_id, script, label, owns in plan:
         path = PIPELINE / script
         assert path.exists(), f"{step_id}: missing {script} — the pipeline folder is incomplete"
         cmd = [sys.executable, str(path), *argv_for(step_id, args)]
-        print(f"\n{'=' * 92}\n  {step_id.upper()}  {label}"
-              f"\n  $ python pipeline/{script} {' '.join(cmd[2:])}\n{'=' * 92}")
+        log.info(f"\n{'=' * 92}\n  {step_id.upper()}  {label}"
+                 f"\n  $ python pipeline/{script} {' '.join(cmd[2:])}\n{'=' * 92}")
         if args.dry_run:
             continue
         t = time.time()
         rc = subprocess.call(cmd, cwd=DATA_ROOT)
         if rc != 0:
-            print(f"\n  {step_id.upper()} FAILED (exit {rc}) — the build is STOPPED here.")
+            log.info(f"\n  {step_id.upper()} FAILED (exit {rc}) — the build is STOPPED here.")
             # What a failure leaves behind depends on which half of the build it was in, and
             # saying "half-written" for a patch that refused to run is worse than saying nothing:
             # it sends you to re-run a rebuild you do not need.
             if step_id in PATCHES:
                 prev = plan[plan.index((step_id, script, label, owns)) - 1][0]
-                print(f"  The patches rewrite whole tables and refuse rather than half-apply, so")
-                print(f"  {owns}/ is as {prev} left it. Read the step's own message above — the")
-                print(f"  usual cause is running a patch onto an ALREADY-PATCHED folder, which is")
-                print(f"  what `--only s3a s3b s3c` does unless s2c has just rebuilt the folder.")
-                print(f"  To redo the patches from scratch on the model you have:")
-                print(f"      uv run python pipeline/s3a_split_despatch2.py --restore")
-                print(f"      uv run python pipeline/run_pipeline.py --only s3a s3b s3c")
-                print(f"  Or rebuild and patch in one go:")
-                print(f"      uv run python pipeline/run_pipeline.py --from s2c")
+                log.info(f"  The patches rewrite whole tables and refuse rather than half-apply, so")
+                log.info(f"  {owns}/ is as {prev} left it. Read the step's own message above — the")
+                log.info(f"  usual cause is running a patch onto an ALREADY-PATCHED folder, which is")
+                log.info(f"  what `--only s3a s3b s3c` does unless s2c has just rebuilt the folder.")
+                log.info(f"  To redo the patches from scratch on the model you have:")
+                log.info(f"      uv run python pipeline/s3a_split_despatch2.py --restore")
+                log.info(f"      uv run python pipeline/run_pipeline.py --only s3a s3b s3c")
+                log.info(f"  Or rebuild and patch in one go:")
+                log.info(f"      uv run python pipeline/run_pipeline.py --from s2c")
             else:
-                print(f"  {owns}/ is now HALF-WRITTEN: it holds some tables from this run and the")
-                print(f"  rest from the last one, and nothing downstream can tell the difference.")
-                print(f"  Fix the failure and re-run from this step:")
-                print(f"      uv run python pipeline/run_pipeline.py --from {step_id}"
-                      + ("  --rebuild" if args.rebuild and step_id == "s1a" else ""))
+                log.info(f"  {owns}/ is now HALF-WRITTEN: it holds some tables from this run and the")
+                log.info(f"  rest from the last one, and nothing downstream can tell the difference.")
+                log.info(f"  Fix the failure and re-run from this step:")
+                log.info(f"      uv run python pipeline/run_pipeline.py --from {step_id}"
+                         + ("  --rebuild" if args.rebuild and step_id == "s1a" else ""))
             return rc
-        print(f"  {step_id} ok ({time.time() - t:.1f}s)")
+        log.info(f"  {step_id} ok ({time.time() - t:.1f}s)")
 
     if not args.dry_run:
-        print(f"\n  all {len(plan)} step(s) ok in {time.time() - t0:.1f}s")
+        log.info(f"\n  all {len(plan)} step(s) ok in {time.time() - t0:.1f}s")
         if plan[-1][0] == "s3c":
-            print(f"  upload  {DATA_ROOT / 'outputs' / 'melbourne_optilogic_final'}")
+            log.info(f"  upload  {DATA_ROOT / 'outputs' / 'melbourne_optilogic_final'}")
     return 0
 
 

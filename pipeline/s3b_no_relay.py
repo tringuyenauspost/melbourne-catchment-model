@@ -44,7 +44,11 @@ import os
 
 from collections import defaultdict
 
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
 from _paths import DATA_ROOT, FINAL_OUT
+
+log = get_logger(__file__)
 
 HERE = str(DATA_ROOT)
 MODEL = str(FINAL_OUT)
@@ -93,8 +97,8 @@ def main():
                 out[(o, p)] += q
         relay = {k: v for k, v in out.items() if inn.get(k, 0) > 0 and k[1] not in makes[k[0]]}
         clash = {k: v for k, v in out.items() if inn.get(k, 0) > 0 and k[1] in makes[k[0]]}
-        print(f"  run check: {len(relay)} relaying (site, product) pairs, "
-              f"{sum(relay.values()):,.0f} EA the site cannot make — CAUGHT by these rows")
+        log.info(f"  run check: {len(relay)} relaying (site, product) pairs, "
+                 f"{sum(relay.values()):,.0f} EA the site cannot make — CAUGHT by these rows")
         # THE RESIDUAL, and it is a residual rather than a failure. A site that relays a flavour
         # it CAN make is exempt from the rule above (its own despatch is legitimate and a Max 0
         # would kill it), so that volume keeps passing through. Only the conditional form —
@@ -102,14 +106,14 @@ def main():
         # UserDefinedConstraint per pair — can separate the two, and it is worth the extra
         # machinery only if this number grows. Reported every run so it cannot drift quietly.
         if clash:
-            print(f"  → {len(clash)} pairs relay a flavour the site CAN make, so they are exempt "
-                  f"and {sum(clash.values()):,.0f} EA "
-                  f"({sum(clash.values()) / max(sum(relay.values()) + sum(clash.values()), 1):.1%}"
-                  f" of the relay) SURVIVES: "
-                  + ", ".join(f"{s}/{p}" for s, p in sorted(clash)))
-            print("    fix those with the conditional UDC if the number ever matters")
+            log.info(f"  → {len(clash)} pairs relay a flavour the site CAN make, so they are exempt "
+                     f"and {sum(clash.values()):,.0f} EA "
+                     f"({sum(clash.values()) / max(sum(relay.values()) + sum(clash.values()), 1):.1%}"
+                     f" of the relay) SURVIVES: "
+                     + ", ".join(f"{s}/{p}" for s, p in sorted(clash)))
+            log.info("    fix those with the conditional UDC if the number ever matters")
     else:
-        print(f"  (no solved run at {RUN} — writing the rule without the empirical check)")
+        log.info(f"  (no solved run at {RUN} — writing the rule without the empirical check)")
 
     # ── the rows ─────────────────────────────────────────────────────────────────────
     # destination is the PDC group: every Despatch2 flow in the run lands at a PUD (251 of 251),
@@ -140,10 +144,13 @@ def main():
         w = csv.DictWriter(fh, fieldnames=cols)
         w.writeheader()
         w.writerows(kept + new)
-    print(f"  {len(buildings)} buildings x {len(products)} Despatch2 products")
-    print(f"  {'stripped ' + str(dropped) + ' rows from a previous run' if dropped else 'no previous rows to strip'}")
-    print(f"  wrote {path}")
-    print(f"    {len(kept)} existing constraints kept + {len(new)} new = {len(kept) + len(new)} rows")
+    log.info(f"  {len(buildings)} buildings x {len(products)} Despatch2 products")
+    log.info(f"  {'stripped ' + str(dropped) + ' rows from a previous run' if dropped else 'no previous rows to strip'}")
+    log.info(f"  wrote {path}")
+    log.info(f"    {len(kept)} existing constraints kept + {len(new)} new = {len(kept) + len(new)} rows")
+
+    # The phase report card — see _report.py.
+    _report.s3b(log=log)
 
 
 if __name__ == "__main__":

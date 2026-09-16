@@ -24,6 +24,9 @@ Run this file directly to see what it resolved and why:
 import os
 from pathlib import Path
 
+from _log import get_logger      # every message in the build goes through here
+
+log = get_logger(__file__)
 _ENV = "MELB_DATA_ROOT"
 PIPELINE = Path(__file__).resolve().parent
 
@@ -55,19 +58,10 @@ FINAL_OUT = OUTPUTS / "melbourne_optilogic_final"      # the folder Cosmic Frog 
 PRESPLIT = OUTPUTS / ".presplit"                # s3a's undo copies
 
 
-def require(path, what, fix):
-    """Assert a path exists, and say what to do about it rather than just naming it."""
-    assert Path(path).exists(), (
-        f"missing {what}: {path}\n"
-        f"  {fix}\n"
-        f"  (data root {DATA_ROOT} — {HOW}; set ${_ENV} to point somewhere else)")
-    return Path(path)
-
-
 if __name__ == "__main__":
-    print(f"pipeline   {PIPELINE}")
-    print(f"data root  {DATA_ROOT}      ({HOW})")
+    log.info(f"pipeline   {PIPELINE}")
+    log.info(f"data root  {DATA_ROOT}      ({HOW})")
     for name, p in (("inputs", INPUTS), ("outputs", OUTPUTS), ("factors_assumed", FASS),
                     ("factors_observed", FOBS), ("melbourne (raw)", RAW),
                     ("optilogic (schemas)", REF)):
-        print(f"  {'OK ' if p.exists() else '-- '} {name:<22} {p}")
+        log.info(f"  {'OK ' if p.exists() else '-- '} {name:<22} {p}")

@@ -2,7 +2,7 @@
 
     IN    inputs/factors_observed/    the measurement (written by step 1, s1a_export_chain2_factors.py)
           inputs/factors_assumed/     the hand-managed assumption tables
-          inputs/melbourne/           temp_clustered.csv, cluster_summary.csv, all-data.xlsx,
+          inputs/melbourne/           temp_clustered.csv, cluster_summary.csv,
                                       the first-mile catchment geojson
           inputs/optilogic/           OPTIONAL. An Anura reference export, kept only to cross-check
                                       the declared column schemas; the build does not need it.
@@ -50,7 +50,6 @@ Run:  uv run python notebooks/build_chain2_observed.py
 # `LOCAL_KEEP` no longer appears in this notebook — it is chain 1's dial, and chain 1 is next door.
 # --------------------------------------------------------------------------------------
 
-from pathlib import Path
 import math, json
 import pandas as pd
 import numpy as np
@@ -60,14 +59,18 @@ import numpy as np
 # produce a len(). `n_catchments()` below counts the same features with the standard library, so
 # the printed number is unchanged and the build runs anywhere pandas does.
 
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
 from _paths import CHAIN2_OUT as OUT, DATA_ROOT as REPO, RAW, REF
+
+log = get_logger(__file__)
 OUT.mkdir(parents=True, exist_ok=True)
 
 def write_csv(df, name):
     df.to_csv(OUT / f"{name}.csv", index=False, encoding="utf-8-sig")
-    print(f"  ✓ {name+'.csv':<34} {len(df):>7,} rows")
+    log.info(f"  ✓ {name+'.csv':<34} {len(df):>7,} rows")
 
-print("REPO:", REPO)
+log.info(f"REPO: {REPO}")
 
 # --------------------------------------------------------------------------------------
 # ## 0. Configuration — the dials the Week 2 session needs
@@ -92,7 +95,7 @@ def dial(name):
     _r = _dl.loc[name]
     return {"int": int, "float": float, "str": str,
             "bool": lambda x: str(x).strip() == "True"}[_r["kind"]](_r["value"])
-print(f"  dials.csv: {len(_dl)} managed parameters")
+log.info(f"  dials.csv: {len(_dl)} managed parameters")
 
 AVAILABLE_HOURS_PER_DAY = dict(zip(
     (_oh := pd.read_csv(FASS / "operating_hours.csv")).kind, _oh.hours_per_day))
@@ -112,15 +115,9 @@ MERGE_DANDENONG  = False          # doc open question 3: collapse the two Danden
 ORIGIN_TAG_TO_DEMAND = True
 
 # ── ORIGIN MIX (Change 12) — how much of each PDC's delivery volume comes from each origin ──
-# Seed for the matrix that the tagged demand rows are built from:
-#   gravity      nearer origins supply more of a PDC's volume (distance decay, ORIGIN_MIX_DECAY_KM)
-#   proportional every PDC gets the same mix, in proportion to each origin's deliverable volume
-# Either way the seed is reconciled by IPF to the row margin (PDC demand), the column margin
-# (origin deliverable volume) and the pinned local-stage cells, so it is always feasible.
-ORIGIN_MIX_SEED     = "gravity"
-ORIGIN_MIX_DECAY_KM = dial("ORIGIN_MIX_DECAY_KM")  # legacy gravity seed (retired branch)
-ORIGIN_MIX_OVERRIDE = RAW / "origin_mix_override.csv"   # optional hand-edited % table, same shape
-                                                        # as the OriginMix.csv this notebook writes
+# Nothing to configure here since Change 28: the matrix IS the measured joint, assembled in the
+# balance cell and written out in section 4b. The gravity seed, its decay constant and the
+# hand-edited override file were retired with the rule they served.
 
 # DELIVERY SOURCING (Change 18) — where a PDC's delivery volume…  → docs/chain2-observed.md#delivery-sourcing-change-18-where-a
 DELIVERY_SOURCING = dial("DELIVERY_SOURCING")  # <-- CHANGE 28: the measured matrix
@@ -129,14 +126,9 @@ DELIVERY_SOURCING = dial("DELIVERY_SOURCING")  # <-- CHANGE 28: the measured mat
 PICKUP_BALANCE = "conserve_supply"            # <-- hold P + IN where origin_mix had it
 
 # LODGEMENT TYPE  → docs/chain2-observed.md#lodgement-type
-LODGEMENT_SPLIT = False           # IND / RES at the pickup state only; collapses after unload
-# We do not have a per-catchment industrial flag. The doc cites 59 industrial catchments network wide.
-# Rather than guess WHICH catchments are industrial, every catchment supplies both products split by
-# this share. Swap to "catchment_list" once ops give us the list — then the ULD/hand split becomes a
-# derived result per the doc, instead of a network-wide average.
-LODGEMENT_MODE   = "volume_share"     # volume_share | catchment_list
-IND_CATCHMENTS   = dial("IND_CATCHMENTS")     # doc figure (lodgement split is off)
-IND_LIST_FILE    = RAW / "industrial_catchments.csv"   # optional: post_code column
+# Retired with Change 28: chain 2 has no pickup state left to split — pickup is chain 1's
+# entity — so the IND/RES switch and its catchment-list companions gated nothing. Reinstate
+# them next door if ops ever supply the industrial-catchment list.
 
 # Interstate DESPATCH — the volume that leaves Melbourne. Locally lodged, not re-exported arrivals.
 # (Change 12 fixed this: the sink used to demand the INTERSTATE-origin Despatch product, which made
@@ -149,7 +141,6 @@ IND_LIST_FILE    = RAW / "industrial_catchments.csv"   # optional: post_code col
 # One product, two competing recipes (ULD / long reach). Doc FAQ 2.
 INTERSTATE_UNLOAD   = dial("INTERSTATE_UNLOAD")     # fixed | bounded | free (Change 23)
 INTERSTATE_ULD_SHARE = dial("INTERSTATE_ULD_SHARE") # used by "fixed" — a PLACEHOLDER
-INTERSTATE_ULD_BOUNDS = (0.20, 0.80)
 
 # ── Change 33 (2026-08-13): the work-centre mix as a user-defined constraint ─────────
 # Q2 from the Optilogic cadence. `bounded` above was documented as NOT EXPRESSIBLE; a
@@ -168,8 +159,8 @@ for _f, _g in UNLOAD_MIX.groupby("family"):
         f"unload_mix.csv: {_f} shares sum to {_g.target_share.sum()}, not 1"
     assert (~_g.constrain).sum() >= 1, \
         f"unload_mix.csv: {_f} constrains every method — the n-1 rule needs one residue"
-print(f"  unload_mix.csv: {len(UNLOAD_MIX)} rows over {UNLOAD_MIX.family.nunique()} families, "
-      f"band +/-{WC_MIX_BAND:.0%}")
+log.info(f"  unload_mix.csv: {len(UNLOAD_MIX)} rows over {UNLOAD_MIX.family.nunique()} families, "
+         f"band +/-{WC_MIX_BAND:.0%}")
 
 # ── PERIODS AND SERVICE ────────────────────────────────────────────────────
 # ONE period (Change 13, 2026-07-29, by request) — a single steady-state day named ALL, as in the
@@ -182,7 +173,6 @@ PERIODS   = ["AM", "PM"][:N_PERIODS] if N_PERIODS > 1 else ["ALL"]
 # two rows differing only by that comment would collide on (customer, product, period). So it is off
 # too; turn it back on with the periods.
 SERVICE_CLASSES = False           # split delivery demand by service class + eligible window
-SAME_DAY_SHARE  = dial("SAME_DAY_SHARE")  # same-day test share (service classes off)
 
 # Operating hours a resource is genuinely available PER DAY.
 # THE POINT OF THE PROPOSAL: capacity = rate x window, never rate x period length.
@@ -224,11 +214,10 @@ BYPASS_BAND      = dial("BYPASS_BAND")
 # ── CHANGE 28 (2026-08-08): CHAIN 2 FROM OBSERVED DATA, AS ITS OWN ENTITY ─────────────
 # Change 37 collapsed OBS_CELL_FLOOR (a share of a row), OBS_MIN_CLASS_SITE (EA per flavour) and
 # OBS_LANE_FLOOR/OBS_LANE_BASIS (a share of a column) into ONE threshold in articles, applied by
-# the exporter. The notebook consumes what it gets and keeps the number only to print it.
-FOLD_MIN_ARTICLES  = dial("FOLD_MIN_ARTICLES")   # EA below which a flavour, cell or lane folds
+# the exporter. The drift guard below reads it straight from the dial at the two points that
+# need it, so there is no module-level copy to go stale.
 XDOCK_ENABLED      = dial("XDOCK_ENABLED")       # Change 28 (12b): the hub cross-dock recipe
 SORT_BAND          = dial("SORT_BAND")           # half-width of every measured band
-ARRIVAL_HEADROOM   = dial("ARRIVAL_HEADROOM")    # chain-2 supplier caps are exact
 
 # ── CHANGE 48: round-2 handling charged for the sorts the SCANS measure ──────────────
 # The model routes fewer parcels through a second sort than the network performs — most of the
@@ -250,18 +239,79 @@ WORKING_DAYS = dial("WORKING_DAYS")
 # re-runs the exporter's own derive + filter code against the scan cache and asserts the CSVs
 # still match, so a stale or hand-edited export fails the build.
 _prov = pd.read_csv(FOBS / "_provenance.csv").set_index("key")["value"]
-print("  observed factors: " + "  ".join(f"{k}={_prov[k]}" for k in
-      ("source_scan_csv", "peak_day", "generated_utc")))
-print(f"  filters applied AT EXPORT: one fold at {_prov['filter_fold_min_articles']} EA "
-      f"(a flavour, a joint cell or a lane below it folds into what survives), round-2 share >= "
-      f"{float(_prov['filter_round2_min_share']):.0%}  "
-      f"({_prov['filtered_volume_reassigned_ea']} EA reassigned to surviving cells)")
+log.info("  observed factors: " + "  ".join(f"{k}={_prov[k]}" for k in
+         ("source_scan_csv", "peak_day", "generated_utc")))
+log.info(f"  filters applied AT EXPORT: one fold at {_prov['filter_fold_min_articles']} EA "
+         f"(a flavour, a joint cell or a lane below it folds into what survives), round-2 share >= "
+         f"{float(_prov['filter_round2_min_share']):.0%}  "
+         f"({_prov['filtered_volume_reassigned_ea']} EA reassigned to surviving cells)")
 # Change 44: the parcel's journey is the FACILITY PATH — the buildings it was in, in order — not
 # the sequence of roles (first sort, first handler, second sort) it used to be built from.
-print(f"  path basis: {_prov['path_basis']} on the {_prov['path_touch_bar'].upper()} bar "
-      f"({_prov['path_touch_events']}), capped at {_prov['path_depth']} buildings "
-      f"({_prov['path_cap_rule']}); mean {_prov['path_mean_buildings']} of our buildings per "
-      f"article before the depot")
+log.info(f"  path basis: {_prov['path_basis']} on the {_prov['path_touch_bar'].upper()} bar "
+         f"({_prov['path_touch_events']}), capped at {_prov['path_depth']} buildings "
+         f"({_prov['path_cap_rule']}); mean {_prov['path_mean_buildings']} of our buildings per "
+         f"article before the depot")
+
+# ══ THE SITE REGISTRY (Change 51) — one row per building, inputs/factors_assumed/sites.csv ══
+# Every facility fact this build needs is a COLUMN there, not a literal here: the nine dicts that
+# used to sit in this file, the coordinates that used to be read out of all-data.xlsx, and the
+# sort-only table that used to be its own CSV. CHAIN 1 READS THE SAME FILE, so the two entities
+# cannot describe different networks, and adding a building is a ROW rather than an edit in nine
+# places. sites.csv row order is the order Facilities.csv is written in.
+#
+#   node            canonical model name — the key every other CSV joins on
+#   code            short arrival code; set on exactly the sites that sort
+#   display         the name the source workbook and the scan dictionaries use
+#   role            hub | depot | sort_only | transport
+#   delivers        runs a last-mile round                  -> DELIVERY_PUD_SET
+#   sorts           has a sorter, so freight may ENTER here -> ARRIVAL_SET
+#   first_mile      collects pickup                         -> chain 1's FIRST
+#   c2_entry        chain 2 models an entry flavour for it (the six the measured fold lands on)
+#   lat, long       the building's point; blank where coord_from is set
+#   coord_assumed   1 = nobody has confirmed this point (Avalon, and it carries a region band)
+#   coord_from      a transport facility with no point of its own borrows this building's
+#   depot_id        the Depot_N key temp_clustered.csv and cluster_summary.csv use
+#   origin_cluster  the geography token pickup collected here carries
+#   van_arm         the van-operations name the scans and the catchment geojson use
+SITES = pd.read_csv(FASS / "sites.csv")
+assert SITES.node.is_unique, "sites.csv: duplicate node"
+assert SITES.display.is_unique, "sites.csv: duplicate display name"
+_has = lambda c: SITES[SITES[c].notna()]
+
+HUB_SET              = set(SITES.node[SITES.role == "hub"])
+PUD_SET              = set(SITES.node[SITES.role != "hub"])
+DELIVERY_PUD_SET     = set(SITES.node[SITES.delivers == 1])
+SORT_ONLY_PUDS       = set(SITES.node[SITES.role == "sort_only"])
+ARRIVAL_SET          = set(SITES.node[SITES.sorts == 1])
+ARRIVAL_PUD_SET      = ARRIVAL_SET - HUB_SET
+FM_ONLY_PUD_NODES    = {r.display: r.node for r in SITES[SITES.role == "transport"].itertuples()}
+FM_ONLY_COORD_SOURCE = {r.node: r.coord_from for r in _has("coord_from").itertuples()}
+HUB_CODE             = {r.node: r.code for r in _has("code").itertuples()}   # Change 14 flavours
+CODE_SITE            = {v: k for k, v in HUB_CODE.items()}
+DEPOT_TO_PUD         = {r.depot_id: r.node for r in _has("depot_id").itertuples()}
+DEPOT_TO_PUD_SHORT   = {f"D{k.split('_')[1]}": v for k, v in DEPOT_TO_PUD.items()}
+FIRST_MILE_FACILITY  = {r.van_arm: r.node for r in _has("van_arm").itertuples()}
+C2_SITES             = tuple(SITES.code[SITES.c2_entry == 1])
+
+# ── ORIGIN CLUSTERS: one per first-mile site, named for the geography not the building ──
+# The doc's Appendix A is the reason: a facility-named tag has no producer once that facility
+# closes, and every demand row asking for it becomes unsatisfiable.
+CLUSTER_OF_PUD = {r.node: r.origin_cluster for r in _has("origin_cluster").itertuples()}
+if MERGE_DANDENONG:
+    CLUSTER_OF_PUD["PUD_Dandenong_Transport"] = "DANDENONG"
+REGION_OF_CLUSTER = {r.cluster: r.region
+                     for r in pd.read_csv(FASS / "origin_clusters.csv").itertuples()}
+
+assert set(HUB_CODE) == ARRIVAL_SET, \
+    "sites.csv: `code` must be set on exactly the rows with sorts = 1"
+assert set(FM_ONLY_COORD_SOURCE) == set(FM_ONLY_PUD_NODES.values()), \
+    "sites.csv: every transport facility needs a coord_from"
+assert set(CLUSTER_OF_PUD) >= set(FIRST_MILE_FACILITY.values()), \
+    "sites.csv: a first-mile site with no origin_cluster — its pickup would carry no tag"
+assert set(REGION_OF_CLUSTER) >= set(CLUSTER_OF_PUD.values()), \
+    "origin_clusters.csv is missing a cluster sites.csv names"
+assert _has("lat").node.tolist() == SITES.node[SITES.coord_from.isna()].tolist(), \
+    "sites.csv: a building needs either its own point or a coord_from, not both and not neither"
 
 # CHANGE 44b — THE MEASUREMENT SPEAKS A WIDER GRAMMAR THAN THIS…  → docs/chain2-observed.md#change-44b-the-measurement-speaks-a
 # The exporter is the vocabulary: parse the measurement's tags with ITS rules, never with
@@ -274,7 +324,7 @@ from s1a_export_chain2_factors import tag_family as _tag_family, tag_site as _ta
 # The scan page (sankey-facility-path.html) has drawn all four since Change 36 — this is the
 # chain-2 half of that, and the two pages now answer with the same vocabulary.
 C2_FAMILY = {"INTERSTATE": "INT", "METRO": "MET", "REGION": "REG", "METRO_DEPOT": "STG"}
-C2_SITES  = ("MPF", "TPF", "MGF", "SWP", "MNP", "BAY")
+# C2_SITES is the `c2_entry` column of sites.csv, read in the registry above.
 
 _j = pd.read_csv(FOBS / "obs_joint.csv")
 _j["fam"] = _j.tag.map(lambda t: C2_FAMILY[_tag_family(t)])
@@ -298,18 +348,21 @@ for (_p, _c), _g in _j.groupby(["pud", "cls"]):
     _tot = sum(_row.values())
     OBS_JOINT[(_p, _c)] = {t: v / _tot for t, v in _row.items()}   # rows sum to 1, always
 OBS_JOINT_F = OBS_JOINT          # pre-filtered at export; the notebook applies nothing further
-print(f"  grammar fold: none (Change 46 keeps all four families); {_off:.1%} of the joint "
-      f"(share-weighted) sat at a site "
-      f"outside {list(C2_SITES)} and was re-spread within its own family"
-      + (f"; {_lost:.2%} had no surviving site in its row and was renormalised away"
+log.info(f"  grammar fold: none (Change 46 keeps all four families); {_off:.1%} of the joint "
+         f"(share-weighted) sat at a site "
+         f"outside {list(C2_SITES)} and was re-spread within its own family"
+         + (f"; {_lost:.2%} had no surviving site in its row and was renormalised away"
          if _lost else ""))
 
 # obs_single_sort is rebuilt from the folded legs below, so the two cannot disagree.
-# the measured 2+ sort volume, for Change 48's round-2 handling scale (dial in the cell above)
-SORT_2PLUS = {"cohort": int(_prov["sort_2plus_cohort"]),
-              "same_day": int(_prov["sort_2plus_same_day"])}
-print(f"  measured 2+ sorts: cohort {SORT_2PLUS['cohort']:,} EA, "
-      f"same-day {SORT_2PLUS['same_day']:,} EA")
+# The measured 2+ sort volume, for Change 48's round-2 handling scale (dial in the cell above).
+# It moved out of _provenance.csv and into its own factor table: provenance describes how the
+# export was made and nothing reads it as data, while this is a MEASUREMENT the build multiplies
+# a cost by. `basis` is keyed on the values ROUND2_COST_BASIS takes, so the dial indexes it.
+_s2p = pd.read_csv(FOBS / "obs_second_sort.csv").set_index("basis")["articles"]
+SORT_2PLUS = {b: int(_s2p[b]) for b in ("cohort", "same_day")}
+log.info(f"  measured 2+ sorts: cohort {SORT_2PLUS['cohort']:,} EA, "
+         f"same-day {SORT_2PLUS['same_day']:,} EA")
 
 _ss = pd.read_csv(FOBS / "obs_single_sort.csv")
 _ss["fam"] = _ss.family.map(C2_FAMILY)
@@ -344,12 +397,11 @@ OBS_DELIVERY = {}                                                              #
 for (_c, _x), _g in _dlvcsv.groupby(["cls", "exit"]):
     for _p, _a in (_g.groupby("pud").articles.sum() / _g.articles.sum()).items():
         OBS_DELIVERY[(_c, _x, _p)] = float(_a)
-print(f"  lanes measured: {len([k for k in OBS_LEGS if k[3] != 'ONCE'])} building-to-building, "
-      f"{len(OBS_DELIVERY)} despatch->depot (verified, not pinned); "
-      f"measured delivery {sum(OBS_DEMAND.values()):,} EA")
+log.info(f"  lanes measured: {len([k for k in OBS_LEGS if k[3] != 'ONCE'])} building-to-building, "
+         f"{len(OBS_DELIVERY)} despatch->depot (verified, not pinned); "
+         f"measured delivery {sum(OBS_DEMAND.values()):,} EA")
 R2_ALLOWED_CODES = sorted(pd.read_csv(FOBS / "obs_round2_sites.csv").site)
-ARR_CODES = ["MPF", "TPF", "MGF", "SWP", "MNP", "BAY"]
-print(f"  round-2 sites (measured, share >= dial): {R2_ALLOWED_CODES}")
+log.info(f"  round-2 sites (measured, share >= dial): {R2_ALLOWED_CODES}")
 
 # ── drift guard: the exporter's own derive + filter, run against the live scan cache ──
 try:
@@ -360,7 +412,7 @@ try:
     _have_cache = _SCAN_CACHE.exists()
 except Exception as _e:
     _have_cache = False
-    print(f"  drift guard skipped — scan pipeline not importable ({_e})")
+    log.info(f"  drift guard skipped — scan pipeline not importable ({_e})")
 if _have_cache:
     _lj, _ls, _l2, _lmeta = _derive_factors(_scan_paths().set_index("Consignment_ID"))
     _fj, _fs, _dead, _moved = _filter_factors(_lj, _ls, dial("FOLD_MIN_ARTICLES"))
@@ -397,6 +449,11 @@ if _have_cache:
                                           _dead, dial("FOLD_MIN_ARTICLES"))
     assert OBS_DEMAND == {(p, c): a for p, c, a in _dem}, \
         "obs_demand.csv is stale — re-run s1a_export_chain2_factors.py"
+    # obs_second_sort is a factor now, so it is guarded like one. While it lived in
+    # _provenance.csv nothing checked it, and a stale copy would have silently mis-scaled every
+    # round-2 handling cost in the model — the failure mode a drift guard exists for.
+    assert SORT_2PLUS == {b: int(_lmeta[f"sort_2plus_{b}"]) for b in SORT_2PLUS}, \
+        "obs_second_sort.csv is stale — re-run s1a_export_chain2_factors.py"
     assert OBS_RECV_ENTRY == {(c, r, e): a for c, r, e, a, _s in _xf}, \
         "the cross-dock matrix disagrees with the exporter — re-run s1a_export_chain2_factors.py"
     assert set(OBS_LEGS) <= {(C2_FAMILY[f], c, e, d if d in C2_SITES else "ONCE")
@@ -407,7 +464,7 @@ if _have_cache:
     for (_f, _c, _e), (_sh, _a) in OBS_SINGLE.items():
         assert abs(OBS_LEGS.get((_f, _c, _e, "ONCE"), 0.0) - _sh) < 1e-9, \
             f"the single-sort share disagrees with the folded lanes at {_f}/{_c}/{_e}"
-    print("  drift guard: CSV factors re-derived and re-filtered from the scan cache — matched")
+    log.info("  drift guard: CSV factors re-derived and re-filtered from the scan cache — matched")
 
 # ── Facilities, unchanged from the current model ───────────────────────────
 PRODUCT_MAP = {
@@ -425,65 +482,6 @@ SERVICE_DEF = {   # service -> (transit band in days, eligible periods)
     "STD": (1.0, ["AM", "PM"]),
     "SD":  (0.2, ["PM"]),            # same day: afternoon wave only (test class)
 }
-HUB_NODES = {
-    "Melbourne Gateway Facility":  "HUB_Melbourne_Gateway",
-    "Tullamarine Parcel Facility": "HUB_Tullamarine_Facility",
-    "Melbourne Parcel Facility":   "HUB_Melbourne_Parcel",
-    "Dandenong Letter Center":     "HUB_Dandenong_Letter",
-}
-PUD_NODES = {
-    "Sunshine West PDC": "PUD_Sunshine_West", "Melbourne North PDC": "PUD_Melbourne_North",
-    "Oakleigh South PDC": "PUD_Oakleigh_South", "Dandenong South PDC": "PUD_Dandenong_South",
-    "Bayswater PDC": "PUD_Bayswater", "Tullamarine PDC": "PUD_Tullamarine",
-    "Mulgrave PDC": "PUD_Mulgrave", "Darebin PDC": "PUD_Darebin", "Pakenham PDC": "PUD_Pakenham",
-    "Mount Waverley PDC": "PUD_Mount_Waverley", "Abbotsford Parcel Delivery": "PUD_Abbotsford",
-}
-FM_ONLY_PUD_NODES = {
-    "Dandenong Transport Facility": "PUD_Dandenong_Transport",
-    "Melbourne Transport":          "PUD_Melbourne_Transport",
-}
-FM_ONLY_COORD_SOURCE = {"PUD_Dandenong_Transport": "HUB_Dandenong_Letter",
-                        "PUD_Melbourne_Transport": "HUB_Melbourne_Parcel"}
-NODE_TO_CANON = {**HUB_NODES, **PUD_NODES}
-HUB_SET  = set(HUB_NODES.values())
-PUD_SET  = set(PUD_NODES.values()) | set(FM_ONLY_PUD_NODES.values())
-FM_ONLY_PUD_SET = set(FM_ONLY_PUD_NODES.values())
-DELIVERY_PUD_SET = set(PUD_NODES.values())
-
-FIRST_MILE_FACILITY = {
-    "Oakleigh South Van Operations":  "PUD_Oakleigh_South",
-    "Sunshine West Van Services":     "PUD_Sunshine_West",
-    "Bayswater Van Operations":       "PUD_Bayswater",
-    "Melbourne North Van Operations": "PUD_Melbourne_North",
-    "Dandenong South Van Operations": "PUD_Dandenong_South",
-    "Dandenong Transport Facility":   "PUD_Dandenong_Transport",
-    "Melbourne Transport":            "PUD_Melbourne_Transport",
-}
-DEPOT_TO_PUD = {
-    "Depot_1": "PUD_Pakenham", "Depot_2": "PUD_Dandenong_South", "Depot_3": "PUD_Oakleigh_South",
-    "Depot_4": "PUD_Mulgrave", "Depot_5": "PUD_Mount_Waverley", "Depot_6": "PUD_Bayswater",
-    "Depot_7": "PUD_Sunshine_West", "Depot_8": "PUD_Abbotsford", "Depot_9": "PUD_Darebin",
-    "Depot_10": "PUD_Tullamarine", "Depot_11": "PUD_Melbourne_North",
-}
-DEPOT_TO_PUD_SHORT = {f"D{k.split('_')[1]}": v for k, v in DEPOT_TO_PUD.items()}
-
-# ── ORIGIN CLUSTERS: one per first-mile site, named for the geography not the building ──
-# The doc's Appendix A is the reason: a facility-named tag has no producer once that facility closes,
-# and every demand row asking for it becomes unsatisfiable.
-CLUSTER_OF_PUD = {
-    "PUD_Bayswater":            "OUTER_EAST",
-    "PUD_Melbourne_North":      "NORTH",
-    "PUD_Sunshine_West":        "WEST",
-    "PUD_Oakleigh_South":       "SOUTH_EAST",
-    "PUD_Dandenong_South":      "DANDENONG",
-    "PUD_Dandenong_Transport":  "DANDENONG_TR",
-    "PUD_Melbourne_Transport":  "INNER",
-}
-if MERGE_DANDENONG:
-    CLUSTER_OF_PUD["PUD_Dandenong_Transport"] = "DANDENONG"
-REGION_OF_CLUSTER = {"OUTER_EAST": "EAST", "SOUTH_EAST": "EAST", "DANDENONG": "EAST",
-                     "DANDENONG_TR": "EAST", "NORTH": "NORTH", "WEST": "WEST", "INNER": "NORTH"}
-
 def origin_tag(pud):
     """The tag a parcel lodged at `pud` carries, at the configured granularity."""
     c = CLUSTER_OF_PUD[pud]
@@ -499,11 +497,6 @@ PUD_CAPACITY = {_r.pud: int(_r.capacity_ea)
 # LOCAL_KEEP / LOCAL_SHARE: chain-1 dials, moved to the chain-1 notebook.
 FACILITY_HEADROOM = dial("FACILITY_HEADROOM")
 
-# Short codes for the origin-flavoured round-1 despatch products (Change 14).
-HUB_CODE = {"HUB_Dandenong_Letter": "DLC", "HUB_Melbourne_Gateway": "MGF",
-            "HUB_Melbourne_Parcel": "MPF", "HUB_Tullamarine_Facility": "TPF"}
-assert set(HUB_CODE) == HUB_SET, f"HUB_CODE does not cover the hubs: {HUB_SET ^ set(HUB_CODE)}"
-
 ORIGIN_TAGS = sorted({origin_tag(p) for p in CLUSTER_OF_PUD})
 # Tags a DELIVERY demand row can carry. Interstate is its own family, not an origin cluster, but it
 # is an origin as far as "where did the parcel come from" is concerned — so it is a column of the
@@ -515,11 +508,11 @@ ORIGIN_TAGS = sorted({origin_tag(p) for p in CLUSTER_OF_PUD})
 STAGE_TAGS  = sorted({origin_tag(p) for p in STAGE_PUD_SET})
 _dtags      = STAGE_TAGS if DELIVERY_SOURCING == "interstate_plus_stage" else ORIGIN_TAGS
 DEMAND_TAGS = (_dtags + ["INTERSTATE"]) if ORIGIN_TAG_TO_DEMAND else ["LOCAL"]
-print(f"origin tags ({ORIGIN_TAG_LEVEL}, {len(ORIGIN_TAGS)}): {ORIGIN_TAGS}")
-print("demand-row tags: see the Change 20 block below — this build redefines them")
-print(f"delivery sourcing: {DELIVERY_SOURCING}"
-      + (f"   pickup balance: {PICKUP_BALANCE}" if DELIVERY_SOURCING == "interstate_plus_stage" else ""))
-print(f"periods: {PERIODS}   hub sort rounds: {HUB_SORT_ROUNDS}"
+log.info(f"origin tags ({ORIGIN_TAG_LEVEL}, {len(ORIGIN_TAGS)}): {ORIGIN_TAGS}")
+log.info("demand-row tags: see the Change 20 block below — this build redefines them")
+log.info(f"delivery sourcing: {DELIVERY_SOURCING}"
+         + (f"   pickup balance: {PICKUP_BALANCE}" if DELIVERY_SOURCING == "interstate_plus_stage" else ""))
+log.info(f"periods: {PERIODS}   hub sort rounds: {HUB_SORT_ROUNDS}"
 )
 
 # ══ Change 20 (2026-07-31) — two adjustments to the manager's sourcing variant ═══════════
@@ -531,29 +524,14 @@ print(f"periods: {PERIODS}   hub sort rounds: {HUB_SORT_ROUNDS}"
 # HUB OVERFLOW: a capped slice of the volume needing a second sort, which it then despatches
 # onward to the delivering PDCs. DLC holds no Despatch1 flavour of its own, so "the two sorts
 # happen at two different sites" stays structural — it may consume EVERY hub's flavour.
-DLC_NODE, DLC_HUB, DLC_PUD = "Dandenong Letter Center", "HUB_Dandenong_Letter", "PUD_Dandenong_Letter"
+# Change 51: this used to be fifteen lines of dict surgery that built DLC as a hub and then
+# moved it, popped its code, chased its sorter across and re-pointed a coordinate. sites.csv
+# gives it `role = sort_only` and there is nothing to undo.
 DLC_SMALL_SHARE = dial("DLC_SMALL_SHARE")   # Max round-2 divert share; measured 0.4%, see dials.csv
-HUB_NODES.pop(DLC_NODE)
-PUD_NODES[DLC_NODE] = DLC_PUD
-NODE_TO_CANON = {**HUB_NODES, **PUD_NODES}
-HUB_SET = set(HUB_NODES.values())
-PUD_SET = set(PUD_NODES.values()) | set(FM_ONLY_PUD_NODES.values())
-HUB_CODE.pop(DLC_HUB)                                  # no Despatch1 flavour, no interstate sink
-# site_sorters.csv now names the building PUD_Dandenong_Letter, as sites.csv and
-# sort_only_sites.csv always did, so there is usually nothing left to move. The pop stays
-# tolerant so an older CSV still loads.
-if DLC_HUB in SITE_SORTERS:
-    SITE_SORTERS[DLC_PUD] = SITE_SORTERS.pop(DLC_HUB)  # the sorter follows the building
-FM_ONLY_COORD_SOURCE["PUD_Dandenong_Transport"] = DLC_PUD
-assert set(HUB_CODE) == HUB_SET, f"HUB_CODE no longer covers the hubs: {HUB_SET ^ set(HUB_CODE)}"
 
 # CHANGE 30 — THE SORT-ONLY SITES: eight sorting buildings, not…  → docs/chain2-observed.md#change-30-the-sort-only-sites
-SORT_ONLY = pd.read_csv(FASS / "sort_only_sites.csv")
-SORT_ONLY_PUDS = set(SORT_ONLY.facility)
-for _r in SORT_ONLY.itertuples():
-    PUD_NODES[_r.node_label] = _r.facility
-NODE_TO_CANON = {**HUB_NODES, **PUD_NODES}
-PUD_SET = set(PUD_NODES.values()) | set(FM_ONLY_PUD_NODES.values())
+# Change 51: sort_only_sites.csv is gone — `role = sort_only` in sites.csv says it, and the
+# coordinates it carried are columns there like every other building's.
 SITE_SORTERS_MISSING = SORT_ONLY_PUDS - set(SITE_SORTERS)
 assert not SITE_SORTERS_MISSING, (
     f"a sort-only site with no sorter: {SITE_SORTERS_MISSING} — add it to site_sorters.csv")
@@ -562,20 +540,14 @@ assert not SITE_SORTERS_MISSING, (
 # 48% of interstate first sorts at Sunshine West / Melbourne Nth / Bayswater (section 12a, now
 # adopted). Those depots join the arrival set and get their own SITE code, so INTERSTATE_<code>
 # and VIC_<code> flavours exist for them.
-ARRIVAL_PUD_SET = {"PUD_Sunshine_West", "PUD_Melbourne_North",
-                   "PUD_Bayswater"} | SORT_ONLY_PUDS      # Change 30: + Avalon, Dandenong LC
-ARRIVAL_SET = HUB_SET | ARRIVAL_PUD_SET
-HUB_CODE.update({"PUD_Sunshine_West": "SWP", "PUD_Melbourne_North": "MNP",
-                 "PUD_Bayswater": "BAY"})
-HUB_CODE.update({_r.facility: _r.code for _r in SORT_ONLY.itertuples()})
-assert set(HUB_CODE) == ARRIVAL_SET, "HUB_CODE must cover exactly the arrival set"
+# Change 51: `sorts = 1` in sites.csv IS the arrival set and `code` is set on exactly those
+# rows — both read and asserted at the registry above, so there is nothing to assemble here.
 # Change 28c: only the sites the scans show running second sorts may run one (obs_round2_sites.csv).
 # Everything else still sorts round 1 and despatches its own flavour DIRECT — it just cannot take
 # another site's flavour for a second pass.
 R2_SORT_SITES = {s for s in ARRIVAL_SET if HUB_CODE[s] in R2_ALLOWED_CODES}
-print(f"  round-2 capability restricted to {sorted(HUB_CODE[s] for s in R2_SORT_SITES)} "
-      f"(measured); other sites despatch their own flavour direct only")
-CODE_SITE = {v: k for k, v in HUB_CODE.items()}
+log.info(f"  round-2 capability restricted to {sorted(HUB_CODE[s] for s in R2_SORT_SITES)} "
+         f"(measured); other sites despatch their own flavour direct only")
 
 # ══ CHANGE 29 — the observed stage lanes, as sets this notebook can loop over ═══════════
 # Stage 2: who hands freight to whom for its FIRST sort. The diagonal (handled and sorted at the
@@ -589,26 +561,22 @@ XD_DESTS   = {d for _, _, d in XD_PAIRS}          # sites that sort someone else
 R2_PAIRS = {(f, c, CODE_SITE[g], CODE_SITE[h]) for (f, c, g, h) in OBS_ROUND2
             if h != "ONCE" and g in CODE_SITE and h in CODE_SITE}
 R2_SORT_SITES = {h for _, _, _, h in R2_PAIRS}    # tightened: a site with no inbound lane is out
-print(f"  Change 29 stage lanes: cross-dock "
-      + (", ".join(sorted({f"{HUB_CODE[r]}->{HUB_CODE[e]}" for _c, r, e in XD_PAIRS})) or "none")
-      + f"; round-2 routing on {len(R2_PAIRS)} family x class x site pairs into "
-      + f"{sorted(HUB_CODE[s] for s in R2_SORT_SITES)}")
+log.info(f"  Change 29 stage lanes: cross-dock "
+         + (", ".join(sorted({f"{HUB_CODE[r]}->{HUB_CODE[e]}" for _c, r, e in XD_PAIRS})) or "none")
+         + f"; round-2 routing on {len(R2_PAIRS)} family x class x site pairs into "
+         + f"{sorted(HUB_CODE[s] for s in R2_SORT_SITES)}")
 
 # Four PDC roles, derived. A site may hold any combination.
 _FM_PUDS         = set(FIRST_MILE_FACILITY.values())
 SORT_PUD_SET     = {s for s in SITE_SORTERS if s in PUD_SET}       # has a sorter
 ROUND0_PUD_SET   = SORT_PUD_SET & _FM_PUDS                         # sorts its OWN pickup
-ROUND2_PUD_SET   = ({DLC_PUD} if "DLC" in R2_ALLOWED_CODES else set())  # observed: DLC is ~1% of 2nd sorts
-DELIVERY_PUD_SET = set(PUD_NODES.values()) - SORT_ONLY_PUDS        # runs a last-mile round
+ROUND2_PUD_SET   = {s for s in SORT_ONLY_PUDS if HUB_CODE[s] in R2_ALLOWED_CODES}
 STAGE_PUD_SET    = ROUND0_PUD_SET & DELIVERY_PUD_SET               # stages only where it delivers
 for _s in SORT_ONLY_PUDS:          # PLACEHOLDER — ops gave no PDC figure for either
     PUD_CAPACITY[_s] = 0           # (both are sorting buildings, not delivery depots)
 PUD_R2_UNLOAD, PUD_R2_LOAD = "UNLOAD_ULD", "LOAD_ULD"   # hub arrivals come in ULDs/cages
 
 # 20b — ALL PICKUP TERMINATES, STRUCTURALLY  → docs/chain2-observed.md#20b-all-pickup-terminates-structurally
-def stage_tag(t):
-    return f"STG_{t}"
-
 # CHANGE 28: stage is keyed by DEPOT, not by origin cluster — 8 of the 11 delivering depots have
 # no cluster entry (they collect no pickup), and the measured stage does not care: kept freight
 # is 35-56% interstate-lodged. STG_PUDS is every delivering depot.
@@ -617,30 +585,21 @@ def stage_tag_pud(p):
 STG_PUDS = sorted(DELIVERY_PUD_SET)
 
 PICKUP_TAGS  = list(ORIGIN_TAGS)                                    # 7 clusters, export or keep
-R0_TAGS      = sorted({origin_tag(p) for p in ROUND0_PUD_SET})      # tags with a round-0 sort
 STG_TAGS     = [stage_tag_pud(p) for p in STG_PUDS]                 # Change 28: 11 depot tags
 DEMAND_TAGS  = STG_TAGS + ["INTERSTATE"]        # redefined below once the site tags exist
 DLV_TAGS     = ["INTERSTATE"]
 
-def zone_tags(pud):
-    """The origins a delivery zone under `pud` may be served from (Change 20b).
-
-    Its own PDC's staged volume, if that PDC stages, plus interstate. Nothing else can physically
-    be in the building: everything else lodged in Melbourne left the state after one sort.
-    """
-    return [stage_tag_pud(pud), "INTERSTATE"]
-
-print(f"  sorting sites ({len(ARRIVAL_SET)}): {sorted(HUB_CODE.values())}"
-      f"   of which hubs: {sorted(HUB_CODE[h] for h in HUB_SET)}"
-      f"   sort-only: {sorted(HUB_CODE[s] for s in SORT_ONLY_PUDS)}   PDC buildings: {len(PUD_SET)}")
-print(f"    round-0 (own pickup): {sorted(_short_ for _short_ in (p.replace('PUD_','') for p in ROUND0_PUD_SET))}")
-print(f"    round-2 (off-hub 2nd sort): {[p.replace('PUD_','') for p in sorted(ROUND2_PUD_SET)]}"
-      f"  (cap {DLC_SMALL_SHARE:.0%})")
-print(f"    staging: {[p.replace('PUD_','') for p in sorted(STAGE_PUD_SET)]}"
-      f"   delivering: {len(DELIVERY_PUD_SET)}")
-print(f"  tag families — pickup {PICKUP_TAGS}")
-print(f"                 stage  {STG_TAGS}")
-print(f"                 demand rows may carry {DEMAND_TAGS}; round 2 is {DLV_TAGS} only")
+log.info(f"  sorting sites ({len(ARRIVAL_SET)}): {sorted(HUB_CODE.values())}"
+         f"   of which hubs: {sorted(HUB_CODE[h] for h in HUB_SET)}"
+         f"   sort-only: {sorted(HUB_CODE[s] for s in SORT_ONLY_PUDS)}   PDC buildings: {len(PUD_SET)}")
+log.info(f"    round-0 (own pickup): {sorted(_short_ for _short_ in (p.replace('PUD_','') for p in ROUND0_PUD_SET))}")
+log.info(f"    round-2 (off-hub 2nd sort): {[p.replace('PUD_','') for p in sorted(ROUND2_PUD_SET)]}"
+         f"  (cap {DLC_SMALL_SHARE:.0%})")
+log.info(f"    staging: {[p.replace('PUD_','') for p in sorted(STAGE_PUD_SET)]}"
+         f"   delivering: {len(DELIVERY_PUD_SET)}")
+log.info(f"  tag families — pickup {PICKUP_TAGS}")
+log.info(f"                 stage  {STG_TAGS}")
+log.info(f"                 demand rows may carry {DEMAND_TAGS}; round 2 is {DLV_TAGS} only")
 
 # ── CHANGE 47 (2026-08-31): class_hub_split.csv is GONE, and so is everything that read
 # it. It survived here as CLASS_HUB_SPLIT / CLASS_HUB_SPLIT_PRE26 / CLASS_HUB_SPLIT_BY_ORIGIN
@@ -734,7 +693,7 @@ def int_tag(site):
 TAGS_FOR = {f: {c: [fam_tag(f, s) for s in fam_sites(f, c)] for c in ("EP", "PP")}
             for f in ARR_FAMS}
 ALL_TAGS = {f: sorted({t for v in TAGS_FOR[f].values() for t in v}) for f in ARR_FAMS}
-INT_TAGS_FOR, ALL_INT_TAGS = TAGS_FOR["INT"], ALL_TAGS["INT"]
+ALL_INT_TAGS = ALL_TAGS["INT"]
 
 def zone_tags_cls(pud, cls):
     """Origins a delivery zone under `pud` may be served from, FOR THIS CLASS (21b).
@@ -745,15 +704,15 @@ def zone_tags_cls(pud, cls):
     return [stage_tag_pud(pud)] + [t for f in ARR_FAMS for t in TAGS_FOR[f][cls]]
 
 DEMAND_TAGS = STG_TAGS + [t for f in ARR_FAMS for t in ALL_TAGS[f]]
-print("  Change 28 — arrival sites per class (measured; equal-weight shares for orientation):")
+log.info("  Change 28 — arrival sites per class (measured; equal-weight shares for orientation):")
 for _c in ("PP", "EP"):
-    print(f"    INT {_c}: " + ", ".join(f"{HUB_CODE[s]} {v:.0%}"
-          for s, v in sorted(arrival_split(_c).items(), key=lambda kv: -kv[1])))
+    log.info(f"    INT {_c}: " + ", ".join(f"{HUB_CODE[s]} {v:.0%}"
+             for s, v in sorted(arrival_split(_c).items(), key=lambda kv: -kv[1])))
     for _f in SD_FAMS:
-        print(f"    {_f} {_c}: " + ", ".join(HUB_CODE[s] for s in fam_sites(_f, _c)))
-print("  delivered flavours: "
-      + " + ".join(f"{len(ALL_TAGS[f])} {FAM_LABEL[f]}" for f in ARR_FAMS)
-      + f" + {len(STG_TAGS)} kept at depot")
+        log.info(f"    {_f} {_c}: " + ", ".join(HUB_CODE[s] for s in fam_sites(_f, _c)))
+log.info("  delivered flavours: "
+         + " + ".join(f"{len(ALL_TAGS[f])} {FAM_LABEL[f]}" for f in ARR_FAMS)
+         + f" + {len(STG_TAGS)} kept at depot")
 
 # Change 23 — THE INTERSTATE UNLOAD MIX, MADE TO ACTUALLY BIND  → docs/chain2-observed.md#change-23-the-interstate-unload-mix
 PRES_EQ   = {"ULD": "ULD", "LR": "LONGREACH"}          # presentation -> unload machine
@@ -779,8 +738,8 @@ def int_pk(cls, pres=None):
     """The interstate arrival product — presentation-flavoured only when the ratio is pinned."""
     return f"{cls}_INTERSTATE_{pres}_Pickup" if (FIXED_PRES and pres) else f"{cls}_INTERSTATE_Pickup"
 
-print(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD.upper()}"
-      + (f"  ({', '.join(f'{k} {v:.0%}' for k, v in INT_PRES.items())}, pinned by supplier "
+log.info(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD.upper()}"
+         + (f"  ({', '.join(f'{k} {v:.0%}' for k, v in INT_PRES.items())}, pinned by supplier "
          f"capacity — exact, no constraint)" if FIXED_PRES
          else "  (two competing recipes, solver picks on cost)"))
 
@@ -809,10 +768,10 @@ _CAL += [
     ("DLC_SMALL_SHARE  (C3)", "0.15", f"{DLC_SMALL_SHARE}",
      "off-hub round-2 measured at 0.37% of delivered volume"),
 ]
-print("Change 26 + 27 — chain-2 calibrated, then constrained, from the 20 May 2026 scan extract")
-print(f"  {'parameter':<30}{'was':<20}{'now':<22}measured from")
+log.info("Change 26 + 27 — chain-2 calibrated, then constrained, from the 20 May 2026 scan extract")
+log.info(f"  {'parameter':<30}{'was':<20}{'now':<22}measured from")
 for k, was, now, why in _CAL:
-    print(f"  {k:<30}{was:<20}{now:<22}{why}")
+    log.info(f"  {k:<30}{was:<20}{now:<22}{why}")
 
 # Things the scans measured that this notebook deliberately does NOT adopt, so the gap is visible
 # in the build log rather than only in the markdown.
@@ -820,9 +779,9 @@ _NOT_ADOPTED = [
     ("the PICKUP side", "chain 1, separate notebook", "despatch split, LOCAL_SHARE and the pickup "
      "total are unmeasurable from a delivery-side extract; chain 1 keeps today's assumptions"),
 ]
-print("\n  measured but NOT adopted here (see section 12):")
+log.info("\n  measured but NOT adopted here (see section 12):")
 for k, cur, why in _NOT_ADOPTED:
-    print(f"    {k:<30}{str(cur):<24}{why}")
+    log.info(f"    {k:<30}{str(cur):<24}{why}")
 
 # The three asserts that used to sit here all checked class_hub_split.csv, which no longer
 # exists: two that its shares summed to 1 and one that the pickup pin covered every origin
@@ -835,10 +794,10 @@ for k, cur, why in _NOT_ADOPTED:
 # This computes it for every combination, so the trade-off is a number rather than an argument.
 # --------------------------------------------------------------------------------------
 
-print("sizing analysis superseded by Change 28 — the entity split changes every row count;")
-print("see the per-table prints as the build runs, and the summary in section 11")
+log.info("sizing analysis superseded by Change 28 — the entity split changes every row count;")
+log.info("see the per-table prints as the build runs, and the summary in section 11")
 
-print("(second-round economics: see the solved run — the bands price it now)")
+log.info("(second-round economics: see the solved run — the bands price it now)")
 
 # --------------------------------------------------------------------------------------
 # ## 2. Source data
@@ -863,32 +822,26 @@ def n_catchments(path):
         return len(json.load(fh).get("features", []))
 N_CATCHMENTS = n_catchments(
     RAW / "first_mile_manifest_catchment_include_transport_facility.geojson")
-nodes = pd.ExcelFile(RAW / "all-data.xlsx").parse("nodes")
-# Change 30: sites the source workbook has no row for (Avalon) carry their coordinates in
-# inputs/factors_assumed/sort_only_sites.csv, flagged there as an assumption.
-_extra = (SORT_ONLY[SORT_ONLY.lat.notna()][["node_label", "lat", "long"]]
-          .rename(columns={"node_label": "Facility"}))
-nodes = pd.concat([nodes[~nodes.Facility.isin(_extra.Facility)], _extra], ignore_index=True)
-print(f"  Change 30 sort-only sites: {sorted(SORT_ONLY_PUDS)}"
-      f"  ({len(_extra)} with assumed coordinates)")
-print(f"  {len(parcels):,} parcel rows | {len(clusters):,} delivery zones | {N_CATCHMENTS} catchments")
-print("  service classes in the source data:",
-      parcels.groupby("service")["parcel_count"].sum().to_dict())
+log.info(f"  Change 30 sort-only sites: {sorted(SORT_ONLY_PUDS)}"
+         f"  ({int(SITES.coord_assumed.sum())} with assumed coordinates)")
+log.info(f"  {len(parcels):,} parcel rows | {len(clusters):,} delivery zones | {N_CATCHMENTS} catchments")
+log.info("  service classes in the source data: "
+         + str(parcels.groupby("service")["parcel_count"].sum().to_dict()))
 
 # ── Facilities ─────────────────────────────────────────────────────────────
-fac = nodes.copy()
-fac["facilityname"] = fac["Facility"].map(NODE_TO_CANON)
-assert fac["facilityname"].notna().all()
-fac["role"] = np.where(fac["facilityname"].isin(HUB_SET), "HUB", "PUD")
+# Change 51: the rows, their ORDER and every coordinate come from sites.csv. The transport
+# facilities are added below — they have no point of their own and borrow `coord_from`'s.
+fac = SITES[SITES.role != "transport"].reset_index(drop=True)
+_is_hub = fac["role"].eq("hub")
 facilities = pd.DataFrame({
-    "facilityname": fac["facilityname"], "status": "Include", "facilitystatus": "Open",
+    "facilityname": fac["node"], "status": "Include", "facilitystatus": "Open",
     "initialstate": "Existing", "address": "", "city": "", "region": "", "postalcode": "",
     "country": "Australia", "latitude": fac["lat"].round(6), "longitude": fac["long"].round(6),
     "fixedstartupcost": "",
-    "fixedoperatingcost": np.where(fac["role"].eq("HUB"), "Fixed_Cost_HUB", "Fixed_Cost_PUD"),
+    "fixedoperatingcost": np.where(_is_hub, "Fixed_Cost_HUB", "Fixed_Cost_PUD"),
     "fixedclosingcost": "", "storagecapacity": "", "storagecapacityuom": "",
     "throughputcapacity": "", "throughputcapacityuom": "",
-    "geographicriskscore": "", "userdefinedriskscore": "", "notes": fac["role"],
+    "geographicriskscore": "", "userdefinedriskscore": "", "notes": np.where(_is_hub, "HUB", "PUD"),
     "fixedco2emissions": "",
 })
 _src = facilities.set_index("facilityname")[["latitude", "longitude"]]
@@ -916,26 +869,24 @@ for i, a in facilities.iterrows():
         if i < j and abs(a.latitude - b.latitude) < 0.005 and abs(a.longitude - b.longitude) < 0.005:
             _co.append((a.facilityname, b.facilityname,
                         round(111 * math.hypot(a.latitude - b.latitude, a.longitude - b.longitude), 2)))
-print(f"  {len(facilities)} facility records. Co-located pairs (km apart):")
+log.info(f"  {len(facilities)} facility records. Co-located pairs (km apart):")
 for a, b, d in _co:
-    print(f"    {a:<26} {b:<26} {d:>5} km")
-print("  The document is right that Tullamarine hub and Tullamarine PDC are the same site (60 m).")
-print("  The two transport facilities sit on borrowed coordinates, so those pairs are our own artefact.")
+    log.info(f"    {a:<26} {b:<26} {d:>5} km")
+log.info("  The document is right that Tullamarine hub and Tullamarine PDC are the same site (60 m).")
+log.info("  The two transport facilities sit on borrowed coordinates, so those pairs are our own artefact.")
 
 # --------------------------------------------------------------------------------------
 # ## 3. Products
 #
 # Five states with one hub sort round; eight with two, because the round-1 despatch state is
 # **flavoured by the hub that produced it** and the second round adds its own unload/sort/despatch.
-# The pickup state carries the origin tag — **and** lodgement type when `LODGEMENT_SPLIT`
-# is on, in which case it collapses at unload. It is currently off, so pickup carries origin only. Interstate is its own family carrying the 27-hour linehaul floor. The origin PDC's round-0
+# Interstate is its own family carrying the 27-hour linehaul floor. The origin PDC's round-0
 # states stay numbered so local-keep volume cannot be confused with hub-sorted volume. With
 # `ORIGIN_TAG_TO_DEMAND` on, `Delivered` carries the tag too, which is what closes the path at the sink.
 # --------------------------------------------------------------------------------------
 
 PRODUCT_COLS = ["productname", "status", "unitvolume", "unitweight", "notes"]
 CLASSES = ["EP", "PP"]
-LODGE = ["IND", "RES"] if LODGEMENT_SPLIT else ["ALL"]
 TWO_ROUNDS = HUB_SORT_ROUNDS == 2
 
 # Change 25: the bypass is a second RECIPE for a product that already exists
@@ -949,7 +900,6 @@ assert not (BYPASS and not TWO_ROUNDS), \
 
 PICKUP_PREFIXES = tuple(f"{c}_{t}_" for c in CLASSES for t in PICKUP_TAGS)
 
-def pk(cls, tag, lod):      return f"{cls}_{tag}_{lod}_Pickup" if LODGEMENT_SPLIT else f"{cls}_{tag}_Pickup"
 def st(cls, tag, state):    return f"{cls}_{tag}_{state}"
 def delivered(cls, tag):    return st(cls, tag, "Delivered")
 def dsp1(cls, tag, code):   return f"{cls}_{tag}_Despatch1_{code}"
@@ -1022,9 +972,9 @@ write_csv(products, "Products")
 _bad = [p for p in products.productname if p.startswith(PICKUP_PREFIXES)
         and any(p.endswith(s) for s in ("Delivered", "Despatch2", "Unloaded2", "Sorted2"))]
 assert not _bad, f"a pickup-origin product owns a delivery-side state: {sorted(set(_bad))[:6]}"
-print(f"  {len(products)} products — "
-      + ", ".join(f"{FAM_LABEL[f]} {len(ALL_TAGS[f])}" for f in ARR_FAMS)
-      + f" site flavours, kept at depot {len(STG_TAGS)}, pickup 0 (chain 1)")
+log.info(f"  {len(products)} products — "
+         + ", ".join(f"{FAM_LABEL[f]} {len(ALL_TAGS[f])}" for f in ARR_FAMS)
+         + f" site flavours, kept at depot {len(STG_TAGS)}, pickup 0 (chain 1)")
 
 # --------------------------------------------------------------------------------------
 # ## 4. Customers and demand
@@ -1087,9 +1037,9 @@ if dial("DEMAND_BASIS") == "observed_peak_day":
     base = base[base["parcel_count"] > 0].reset_index(drop=True)
     assert int(base["parcel_count"].sum()) == sum(OBS_DEMAND.values()), \
         "the rescale did not land on the measured total"
-    print(f"  Change 29: demand rebased on the measured day — {_before:,} EA (zone table, every "
-          f"delivery date in the extract) -> {int(base['parcel_count'].sum()):,} EA (peak day, "
-          f"the cohort every observed factor is measured on)")
+    log.info(f"  Change 29: demand rebased on the measured day — {_before:,} EA (zone table, every "
+             f"delivery date in the extract) -> {int(base['parcel_count'].sum()):,} EA (peak day, "
+             f"the cohort every observed factor is measured on)")
 
 D_TOTAL = int(base["parcel_count"].sum())
 
@@ -1176,13 +1126,13 @@ if XDOCK_ENABLED:
         "a site would cross-dock in more than it sorts"
 XD_TOT = sum(XDOCK_AT.values())
 
-print("  interstate arrivals by site x class (measured):  "
-      + ", ".join(f"{HUB_CODE[s]}/{c} {v:,}" for (s, c), v in sorted(
-          IN_by_site_class.items(), key=lambda kv: (HUB_CODE[kv[0][0]], kv[0][1]))))
+log.info("  interstate arrivals by site x class (measured):  "
+         + ", ".join(f"{HUB_CODE[s]}/{c} {v:,}" for (s, c), v in sorted(
+             IN_by_site_class.items(), key=lambda kv: (HUB_CODE[kv[0][0]], kv[0][1]))))
 for _f in SD_FAMS:
-    print(f"  {FAM_LABEL[_f]} by site x class (measured):  "
-          + ", ".join(f"{HUB_CODE[s]}/{c} {v:,}" for (s, c), v in sorted(
-              VOL[_f].items(), key=lambda kv: (HUB_CODE[kv[0][0]], kv[0][1]))))
+    log.info(f"  {FAM_LABEL[_f]} by site x class (measured):  "
+             + ", ".join(f"{HUB_CODE[s]}/{c} {v:,}" for (s, c), v in sorted(
+                 VOL[_f].items(), key=lambda kv: (HUB_CODE[kv[0][0]], kv[0][1]))))
 if XDOCK_ENABLED:
     _hand = {}
     for (h, _c2), v in XDOCK_HAND.items():
@@ -1190,16 +1140,16 @@ if XDOCK_ENABLED:
     _at = {}
     for (s2, _c2), v in XDOCK_AT.items():
         _at[s2] = _at.get(s2, 0) + v
-    print(f"  cross-dock: {XD_TOT:,} EA — handled at "
-          + ", ".join(f"{HUB_CODE[h]} {v:,}" for h, v in sorted(_hand.items()) if v)
-          + "; sorted at "
-          + ", ".join(f"{HUB_CODE[s]} {v:,}" for s, v in sorted(_at.items()) if v))
+    log.info(f"  cross-dock: {XD_TOT:,} EA — handled at "
+             + ", ".join(f"{HUB_CODE[h]} {v:,}" for h, v in sorted(_hand.items()) if v)
+             + "; sorted at "
+             + ", ".join(f"{HUB_CODE[s]} {v:,}" for s, v in sorted(_at.items()) if v))
 
 assert STAGE_TOT + IN_TOT + VIC_TOT == D_TOTAL, "chain-2 balance broken"
-print(f"  D {D_TOTAL:,} = " + " + ".join(
+log.info(f"  D {D_TOTAL:,} = " + " + ".join(
     [f"{FAM_LABEL['STG']} {STAGE_TOT:,} ({100*STAGE_TOT/D_TOTAL:.1f}%)"]
     + [f"{FAM_LABEL[f]} {FAM_TOT[f]:,} ({100*FAM_TOT[f]/D_TOTAL:.1f}%)" for f in ARR_FAMS])
-      + "   — exact, measured, no free parameter")
+         + "   — exact, measured, no free parameter")
 
 # ── PDC throughput capacity (Change 16, chain-2 load only) ────────────────────────────
 _dem_pud = base.groupby("pud")["parcel_count"].sum()
@@ -1243,8 +1193,8 @@ def _round2_inbound(depot):
     return t
 _r2_pud = {p: _round2_inbound(p) for p in sorted(DELIVERY_PUD_SET)}
 _lifted, _reason = {}, {}
-print(f"  facility load check (delivery + arrivals + stage + round-2 inbound vs PUD_CAPACITY, "
-      f"+{FACILITY_HEADROOM:.0%} headroom):")
+log.info(f"  facility load check (delivery + arrivals + stage + round-2 inbound vs PUD_CAPACITY, "
+         f"+{FACILITY_HEADROOM:.0%} headroom):")
 for d in sorted(DELIVERY_PUD_SET):
     load = (float(_dem_pud.get(d, 0)) + float(_arr_pud.get(d, 0))
             + float(_stg_pud.get(d, 0)) + float(_r2_pud.get(d, 0)))
@@ -1254,11 +1204,11 @@ for d in sorted(DELIVERY_PUD_SET):
         _lifted[d], _reason[d] = want, ("over ops cap" if load > cap else "headroom only")
         _extra = ("" if not _r2_pud.get(d) else
                   f", of which {_r2_pud[d]:,.0f} is another site's second sort")
-        print(f"    {d:<26} {load:>9,.0f}  vs cap {cap:>7,}  -> LIFTED to {want:,}  "
-              f"({_reason[d]}{_extra})")
+        log.info(f"    {d:<26} {load:>9,.0f}  vs cap {cap:>7,}  -> LIFTED to {want:,}  "
+                 f"({_reason[d]}{_extra})")
     else:
         _lifted[d] = cap
-        print(f"    {d:<26} {load:>9,.0f}  vs cap {cap:>7,}  ({100 * load / cap:.0f}% util)")
+        log.info(f"    {d:<26} {load:>9,.0f}  vs cap {cap:>7,}  ({100 * load / cap:.0f}% util)")
 for _c in ("throughputcapacity", "throughputcapacityuom"):
     facilities[_c] = facilities[_c].astype(object)
 _m = facilities["facilityname"].isin(_lifted)
@@ -1281,13 +1231,10 @@ write_csv(facilities, "Facilities")     # rewrite, now with the caps
 # | column | `sum over PDCs = V_origin = P − OUT − L + stage` | an origin cannot deliver more than it lodged, net of what left interstate and what it kept |
 # | pinned cell | `M[p][own origin] >= that PDC's staged volume` | **local stage**: yesterday's own kept pickup is delivery-ready on site this morning, so Bayswater must deliver at least its own staged volume of Bayswater-origin parcels |
 #
-# The default seed is a **gravity prior** — nearer origins supply more of a PDC's volume, decaying with
-# `ORIGIN_MIX_DECAY_KM` — reconciled to all three by iterative proportional fitting. The result is written
-# to `OriginMix.csv` as a percentage table.
-#
-# **To replace it with real percentages:** edit that file, save it as `inputs/melbourne/origin_mix_override.csv`,
-# re-run. Your percentages are treated as a *target*: they are reconciled to the same three margins and the
-# largest adjustment is reported, so an edit that cannot be supplied is visible rather than silently wrong.
+# Since Change 28 the matrix is not seeded and not fitted: it IS the measured joint, assembled
+# per (depot, class) in the balance cell, and the three margins above are verified rather than
+# imposed. It is written to `OriginMix.csv` as a percentage table for reading, not for reloading —
+# nothing reads that file back except the stage-share check at the end of this script.
 # --------------------------------------------------------------------------------------
 
 # ── ORIGIN MIX: how much of each PDC's delivery volume comes from each origin ──────────
@@ -1368,14 +1315,14 @@ origin_mix = pd.DataFrame(
     columns=["pud"] + MIX_ORIGINS)
 write_csv(origin_mix, "OriginMix")
 
-print("  origin mix, MEASURED (% of each PDC's delivery volume) — three families summarised:")
-print("    " + "PDC".ljust(24) + "stage".rjust(8) + "interstate".rjust(12) + "victoria".rjust(10))
+log.info("  origin mix, MEASURED (% of each PDC's delivery volume) — three families summarised:")
+log.info("    " + "PDC".ljust(24) + "stage".rjust(8) + "interstate".rjust(12) + "victoria".rjust(10))
 for p in MIX_PUDS:
     tot = max(sum(mix_tot[(p, u)] for u in MIX_ORIGINS), 1)
     stg = 100 * mix_tot[(p, stage_tag_pud(p))] / tot
     intl = 100 * sum(mix_tot[(p, t)] for t in ALL_INT_TAGS) / tot
     vic = 100 * sum(mix_tot[(p, t)] for f in SD_FAMS for t in ALL_TAGS[f]) / tot
-    print(f"    {p.replace('PUD_', ''):<24}{stg:>7.1f}%{intl:>11.1f}%{vic:>9.1f}%")
+    log.info(f"    {p.replace('PUD_', ''):<24}{stg:>7.1f}%{intl:>11.1f}%{vic:>9.1f}%")
 
 # ── CustomerDemand: zone x class x service x period x ORIGIN ──────────────
 # Change 12: each delivery row is split by origin using its PDC's row of the origin mix. That split
@@ -1442,14 +1389,14 @@ for c in CLASSES:
         want = sum(MIX[(p, tag, c)] for p in sorted(DELIVERY_PUD_SET))
         assert abs(got - want) <= len(DELIVERY_PUD_SET), (
             f"{tag} {c}: delivered {got:,} vs mix {want:,}")
-print("  delivered by family (Change 28):")
+log.info("  delivered by family (Change 28):")
 for c in CLASSES:
     for _fam, _tags in [(f, TAGS_FOR[f][c]) for f in ARR_FAMS]:
         _v = int(sum(_dlv.loc[_dlv.productname == delivered(c, t), "quantity"].sum() for t in _tags))
-        print(f"    {c} {_fam}: {_v:>8,} over {len(_tags)} site flavours")
-print(f"  demand rows {len(demand):,}  (untagged build: ~{len(zone_rows) + 2 * len(HUB_SET) * len(CLASSES):,};"
-      f" document estimate ~2,400)")
-print(f"  delivered {int(_dlv['quantity'].sum()):,} = D — chain 2 has no other sink")
+        log.info(f"    {c} {_fam}: {_v:>8,} over {len(_tags)} site flavours")
+log.info(f"  demand rows {len(demand):,}  (untagged build: ~{len(zone_rows) + 2 * len(HUB_SET) * len(CLASSES):,};"
+         f" document estimate ~2,400)")
+log.info(f"  delivered {int(_dlv['quantity'].sum()):,} = D — chain 2 has no other sink")
 
 # --------------------------------------------------------------------------------------
 # ## 5. Suppliers
@@ -1672,10 +1619,10 @@ if BYPASS:
         _b = bill_of_materials.loc[bill_of_materials.bomname == f"BOM_LOAD_DIRECT_{c}"]
         assert len(_b) == 1 and _b.iloc[0].productname == f"{c}_INTERSTATE_Sorted", \
             f"the {c} bypass load must consume the round-1 sorted state, not {_b.productname.tolist()}"
-    print(f"  Change 25: bypass ON ({INTERSTATE_BYPASS}) — {len(CLASSES)} direct load recipes, "
-          f"0 new products")
-print(f"  {len(bill_of_materials)} BOM rows — no delivery-side recipe consumes a pickup-origin "
-      f"product, so ALL pickup terminates after one sort (structural)")
+    log.info(f"  Change 25: bypass ON ({INTERSTATE_BYPASS}) — {len(CLASSES)} direct load recipes, "
+             f"0 new products")
+log.info(f"  {len(bill_of_materials)} BOM rows — no delivery-side recipe consumes a pickup-origin "
+         f"product, so ALL pickup terminates after one sort (structural)")
 
 # --------------------------------------------------------------------------------------
 # ## 7. Work centres — capacity from the operating window
@@ -1725,13 +1672,12 @@ def _machines(site):
 # share" until products carry a size attribute. A Max, not a pin.
 _R2_VOL    = D_TOTAL - STAGE_TOT
 r2_pud_vol = {p: int(round(DLC_SMALL_SHARE * _R2_VOL)) for p in sorted(ROUND2_PUD_SET)}
-R2_PUD_TOT = sum(r2_pud_vol.values())
 # its docks are sized to that slice (plus the same headroom the hubs get), expressed as a rate/hr
 # because capacity here is rate x operating window, not a flat daily figure.
 PUD_R2_DOCK_HR = {p: v * (1 + HUB_DOCK_HEADROOM) / AVAILABLE_HOURS_PER_DAY["UNLOAD"]
                   for p, v in r2_pud_vol.items()}
-print(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_SMALL_SHARE:.0%} -> "
-      + ", ".join(f"{_short(k)} {v:,}" for k, v in r2_pud_vol.items()) + " (rest stays at the hubs)")
+log.info(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_SMALL_SHARE:.0%} -> "
+         + ", ".join(f"{_short(k)} {v:,}" for k, v in r2_pud_vol.items()) + " (rest stays at the hubs)")
 
 # ── Hub dock sizing (Change 14) ────────────────────────────────────────────────────────
 # Round 1 = exported pickup + interstate arrivals. Round 2 = every delivery-bound parcel takes a
@@ -1759,22 +1705,22 @@ _need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_HEADROOM)
          for h in sorted(ARRIVAL_SET)}
 HUB_DOCK_SCALE = ({h: max(1.0, _need[h] / _dock_base) for h in sorted(ARRIVAL_SET)}
                   if HUB_DOCK_AUTOSCALE else {h: 1.0 for h in sorted(ARRIVAL_SET)})
-print(f"  hub docks: {_touch:,} touches/side network-wide (R1 {_r1_touch:,} + R2 {_r2_touch:,}) "
-      f"vs a stated fleet of {int(_dock_day):,} EA/day. Sized PER HUB (Change 22):")
+log.info(f"  hub docks: {_touch:,} touches/side network-wide (R1 {_r1_touch:,} + R2 {_r2_touch:,}) "
+         f"vs a stated fleet of {int(_dock_day):,} EA/day. Sized PER HUB (Change 22):")
 for h in sorted(ARRIVAL_SET, key=lambda x: -_need[x]):
     _sc = HUB_DOCK_SCALE[h]
-    print(f"    {HUB_CODE[h]:<4} R1 {_r1_hub[h]:>9,.0f} (pinned) + R2 {min(_r2_even, _r2_pool[h]):>9,.0f} "
-          f"(cap: pool {_r2_pool[h]:,.0f}) = {_need[h]:>9,.0f} needed vs {int(_dock_base):,} base "
-          f"-> x{_sc:.3f}" + (f"  ** {math.ceil(_dock_base * _sc):,} EA/side **" if _sc > 1.0 else "  (fits)"))
+    log.info(f"    {HUB_CODE[h]:<4} R1 {_r1_hub[h]:>9,.0f} (pinned) + R2 {min(_r2_even, _r2_pool[h]):>9,.0f} "
+             f"(cap: pool {_r2_pool[h]:,.0f}) = {_need[h]:>9,.0f} needed vs {int(_dock_base):,} base "
+             f"-> x{_sc:.3f}" + (f"  ** {math.ceil(_dock_base * _sc):,} EA/side **" if _sc > 1.0 else "  (fits)"))
 _short_hubs = {h: math.ceil(_dock_base * (s - 1)) for h, s in HUB_DOCK_SCALE.items() if s > 1.0}
 if _short_hubs:
-    print(f"  NOTE: the stated dock fleet is SHORT at "
-          + ", ".join(f"{HUB_CODE[h]} (+{v:,} EA/day/side)" for h, v in sorted(_short_hubs.items()))
-          + ". A scale above 1.0 is a REAL OPS REQUIREMENT — more dock machines or longer dock "
-            "hours — not a modelling fudge. It used to be blamed on the assumed PP hub split; "
-            "that split is gone (Change 47) and the arrivals driving these docks are MEASURED, "
-            "so the requirement is a finding about the network rather than about a dial. "
-            "Confirm with ops.")
+    log.info(f"  NOTE: the stated dock fleet is SHORT at "
+             + ", ".join(f"{HUB_CODE[h]} (+{v:,} EA/day/side)" for h, v in sorted(_short_hubs.items()))
+             + ". A scale above 1.0 is a REAL OPS REQUIREMENT — more dock machines or longer dock "
+               "hours — not a modelling fudge. It used to be blamed on the assumed PP hub split; "
+               "that split is gone (Change 47) and the arrivals driving these docks are MEASURED, "
+               "so the requirement is a finding about the network rather than about a dial. "
+               "Confirm with ops.")
 
 WC_COLS = ["workcentername", "facilityname", "status", "workcenterstatus", "initialstate",
            "throughputcapacity", "throughputcapacityuom", "fixedoperatingcost", "fixedstartupcost",
@@ -1828,14 +1774,14 @@ _hub_dock = work_centers[work_centers.workcentername.str.startswith("WC_UNLOAD")
 _hub_dock = _hub_dock[_hub_dock.facilityname.isin(HUB_SET)]
 _per_period = int(_hub_dock.throughputcapacity.sum())          # the cap applies in EVERY period
 _per_day    = _per_period * len(PERIODS)
-print(f"  hub unload capacity {_per_period:,}/period x {len(PERIODS)} = {_per_day:,} EA/day "
-      f"vs {_touch:,} touches needed ({100*_touch/_per_day:.0f}% used) "
-      f"[{HUB_SORT_ROUNDS} sort round(s): R1 {_r1_touch:,} + R2 {_r2_touch:,}]")
-print(f"  for comparison, the current model's 20 h day would give "
-      f"{int(4 * (750+2750+1750) * 20):,} EA/day across 4 hubs — the operating-window correction "
-      f"removes about a third of the stated dock capacity.")
+log.info(f"  hub unload capacity {_per_period:,}/period x {len(PERIODS)} = {_per_day:,} EA/day "
+         f"vs {_touch:,} touches needed ({100*_touch/_per_day:.0f}% used) "
+         f"[{HUB_SORT_ROUNDS} sort round(s): R1 {_r1_touch:,} + R2 {_r2_touch:,}]")
+log.info(f"  for comparison, the current model's 20 h day would give "
+         f"{int(4 * (750+2750+1750) * 20):,} EA/day across 4 hubs — the operating-window correction "
+         f"removes about a third of the stated dock capacity.")
 if _per_day < _touch:
-    print(f"  SHORT by {_touch - _per_day:,} EA/day.")
+    log.info(f"  SHORT by {_touch - _per_day:,} EA/day.")
 
 # ── Processes: one per machine per period ──────────────────────────────────
 PROC_COLS = ["processname", "stepname", "stepnumber", "status", "workcentername", "processingrate",
@@ -1877,7 +1823,7 @@ R2_MODELLED = sum(OBS_ROUND2.get((_f, _c, HUB_CODE[_g], HUB_CODE[_h]), 0.0) * VO
 R2_PROCS = set()          # the cloned process names, for the Change 33 work-centre guard
 if ROUND2_COST_BASIS == "off" or not R2_MODELLED:
     R2_SCALE, procs_r2 = 1.0, procs_at
-    print("  Change 48: round-2 handling NOT scaled (ROUND2_COST_BASIS=off)")
+    log.info("  Change 48: round-2 handling NOT scaled (ROUND2_COST_BASIS=off)")
 else:
     R2_SCALE = SORT_2PLUS[ROUND2_COST_BASIS] / R2_MODELLED
     assert R2_SCALE >= 1, f"round-2 scale {R2_SCALE:.3f} below 1 — the model routes MORE second " \
@@ -1908,9 +1854,9 @@ else:
                 proc_rows.append(_clone)
                 procs_r2[_site].setdefault(_a, []).append(_clone[0])
                 R2_PROCS.add(_clone[0])
-    print(f"  Change 48: round-2 handling charged for {SORT_2PLUS[ROUND2_COST_BASIS]:,} measured "
-          f"2+ sorts against {R2_MODELLED:,.0f} modelled — x{R2_SCALE:.4f} on "
-          f"{sum(len(v) for v in procs_r2.values())} cloned processes")
+    log.info(f"  Change 48: round-2 handling charged for {SORT_2PLUS[ROUND2_COST_BASIS]:,} measured "
+             f"2+ sorts against {R2_MODELLED:,.0f} modelled — x{R2_SCALE:.4f} on "
+             f"{sum(len(v) for v in procs_r2.values())} cloned processes")
 
 processes = pd.DataFrame(proc_rows, columns=PROC_COLS)
 write_csv(processes, "Processes")
@@ -2071,8 +2017,8 @@ if TWO_ROUNDS:
                                               + [f"BOM_LOAD_{FAM_TAG[_f]}" for _f in SD_FAMS] +
                                                 "BOM_LOAD_XDOCK")).any(), (
             f"{d} must not run a round-1 load — it holds no Despatch1 flavour")
-    print(f"  round 2 wired: no site unloads its own flavour; "
-          f"{sorted(_short(p) for p in ROUND2_PUD_SET)} takes every flavour (it has none)")
+    log.info(f"  round 2 wired: no site unloads its own flavour; "
+             f"{sorted(_short(p) for p in ROUND2_PUD_SET)} takes every flavour (it has none)")
 
 # ── Change 25: the bypass is reachable, and did not open a same-site double sort ───────
 if BYPASS:
@@ -2081,7 +2027,7 @@ if BYPASS:
         for c in hub_classes(h):
             assert (at_h.productname == st(c, int_tag(h), "Despatch2")).any(), (
                 f"{HUB_CODE[h]} has no direct load for its own {c} arrivals — bypass unreachable")
-    print(f"  bypass wired: every arrival site can load its own arrivals straight to Despatch2")
+    log.info(f"  bypass wired: every arrival site can load its own arrivals straight to Despatch2")
 
 # ══ GUARANTEES ════════════════════════════════════════════════════════════════════════
 _out_side = production_policies.productname.str.contains("Despatch2|Delivered", regex=True)
@@ -2095,9 +2041,9 @@ for h in sorted(ARRIVAL_SET):
                    if f"_INTERSTATE_Despatch1_{HUB_CODE[h]}" in p})
     assert made == sorted(hub_classes(h)), \
         f"{HUB_CODE[h]} INTERSTATE Despatch1 for {made}, measured arrivals say {sorted(hub_classes(h))}"
-print("  source->sink: pickup terminates at a hub/local sink (Change 20b); every interstate "
-      "parcel carries its ARRIVAL HUB to the zone (Change 21b)  OK")
-print("  class routing: " + " | ".join(f"{HUB_CODE[h]} {hub_classes(h)}" for h in sorted(HUB_SET)))
+log.info("  source->sink: pickup terminates at a hub/local sink (Change 20b); every interstate "
+         "parcel carries its ARRIVAL HUB to the zone (Change 21b)  OK")
+log.info("  class routing: " + " | ".join(f"{HUB_CODE[h]} {hub_classes(h)}" for h in sorted(HUB_SET)))
 
 # --------------------------------------------------------------------------------------
 # ## 9. Sourcing, lanes and constraints
@@ -2144,11 +2090,11 @@ _ref_tp = REF / "TransportationPolicies.csv"
 if _ref_tp.exists():
     _ref_cols = list(pd.read_csv(_ref_tp, nrows=0).columns)
     if _ref_cols != TP_COLS:
-        print(f"  WARNING: the Anura reference at {_ref_tp} carries a different column set "
-              f"({len(_ref_cols)} columns against the {len(TP_COLS)} declared here). "
-              f"Only in the reference: {[c for c in _ref_cols if c not in TP_COLS]}; "
-              f"only here: {[c for c in TP_COLS if c not in _ref_cols]}. "
-              f"The schema has moved — update TP_COLS above.")
+        log.info(f"  WARNING: the Anura reference at {_ref_tp} carries a different column set "
+                 f"({len(_ref_cols)} columns against the {len(TP_COLS)} declared here). "
+                 f"Only in the reference: {[c for c in _ref_cols if c not in TP_COLS]}; "
+                 f"only here: {[c for c in TP_COLS if c not in _ref_cols]}. "
+                 f"The schema has moved — update TP_COLS above.")
 _tm = pd.read_csv(FASS / "transport_modes.csv")
 MODE_CAP  = {_r.mode: int(_r.capacity_ea) for _r in _tm.itertuples()}
 MODE_RATE = dict(zip(_tm["mode"], _tm.rate_per_km))
@@ -2180,8 +2126,7 @@ def lane(o, d, prod, note, mode=None, rule="Prorate"):
         row.update(unitcost=0.8, unitcostuom="KM")
     tp_rows.append(row)
 
-hubs, dpuds = sorted(HUB_SET), sorted(DELIVERY_PUD_SET)
-r2puds = sorted(ROUND2_PUD_SET)
+dpuds = sorted(DELIVERY_PUD_SET)
 
 # ══ CHAIN 1 lives in its own notebook now (Change 28). ═══════════════════════════════
 # ══ CHAIN 2 — INTERSTATE + STAGE -> DELIVERY ══════════════════════════════════════════
@@ -2264,9 +2209,9 @@ for c in CLASSES:
     for t in [x for f in ARR_FAMS for x in TAGS_FOR[f][c]]:
         assert (transportation_policies.productname == dsp_final(c, t)).any(), \
             f"no lane carries {dsp_final(c, t)} — its delivery demand cannot be met"
-print(f"  lane coverage: every "
-      f"{sum(len(TAGS_FOR[f][c]) for f in ARR_FAMS for c in CLASSES)} "
-      f"family x flavour despatch product rides at least one lane")
+log.info(f"  lane coverage: every "
+         f"{sum(len(TAGS_FOR[f][c]) for f in ARR_FAMS for c in CLASSES)} "
+         f"family x flavour despatch product rides at least one lane")
 
 # no intermediate state may ride a lane
 assert not transportation_policies.productname.str.contains(
@@ -2291,8 +2236,8 @@ write_csv(pd.DataFrame([[m, "Include", "", "", "",
                          MODE_CAP[m], "EA", f"{MODE_RATE[m]} $/km per trip", "", ""]
                         for m in MODE_CAP], columns=TM_COLS), "TransportationModes")
 
-print("  lanes by leg:")
-print(transportation_policies.notes.value_counts().sort_index().to_string())
+log.info("  lanes by leg:")
+log.info(transportation_policies.notes.value_counts().sort_index().to_string())
 
 # ── CustomerFulfillmentPolicies / ReplenishmentPolicies ────────────────────
 CF_COLS = ["customername", "productname", "sourcename", "status", "unitcost", "unitcostuom",
@@ -2406,9 +2351,9 @@ if DESPATCH_MIN_SHIPMENT > 0:
            periodnamegroupbehavior="Aggregate", constrainttype="Conditional Min",
            constraintvalue=DESPATCH_MIN_SHIPMENT, constraintvalueuom="EA", status="Include",
            notes="minimum viable despatch shipment — run nothing, or run a real load")
-    print(f"  Change 24: Conditional Min {DESPATCH_MIN_SHIPMENT:,} EA on {len(_arcs)} arcs "
-          f"(legs {'/'.join(DESPATCH_MIN_LEGS)}); ceiling {_ceiling[_tight]:,} EA at "
-          f"{_short(_tight)}; +{len(_arcs)} binaries, the model is now a MIP")
+    log.info(f"  Change 24: Conditional Min {DESPATCH_MIN_SHIPMENT:,} EA on {len(_arcs)} arcs "
+             f"(legs {'/'.join(DESPATCH_MIN_LEGS)}); ceiling {_ceiling[_tight]:,} EA at "
+             f"{_short(_tight)}; +{len(_arcs)} binaries, the model is now a MIP")
 
 # ── Change 25: the bypass controls ────────────────────────────────────────────────────
 # Both rows here NAME THE PRODUCT, which Change 24's rows deliberately do not. The direct arcs
@@ -2486,9 +2431,9 @@ if BYPASS:
                                  f"held to measured {_share:.1%} +/- {SORT_BAND:.0%}, on the "
                                  f"{_ride:,} EA that leaves the site on a lane")
                     _n_band += 1
-        print(f"  Change 29b: single-sort share banded on {_n_band} family x site x class cells "
-              f"(measured +/- {SORT_BAND:.0%}) — only where a round-2 lane offers an "
-              f"alternative, and only on volume that rides a lane out")
+        log.info(f"  Change 29b: single-sort share banded on {_n_band} family x site x class cells "
+                 f"(measured +/- {SORT_BAND:.0%}) — only where a round-2 lane offers an "
+                 f"alternative, and only on volume that rides a lane out")
     # ── Change 29: round-2 ROUTING banded to the measured pairs ───────────────────────
     # The single-sort bands above say HOW MUCH leaves a site sorted once. These say where the
     # rest goes. The despatch product names the origin flavour, and only `_h` sorts `_g`'s
@@ -2512,7 +2457,7 @@ if BYPASS:
                    notes=f"Change 29: {_share:.1%} +/- {SORT_BAND:.0%} of {_fam} {_c} arriving at "
                          f"{HUB_CODE[_g]} takes its second sort at {HUB_CODE[_h]} (measured)")
             _n_r2 += 1
-        print(f"  Change 29: round-2 routing banded on {_n_r2} measured lanes")
+        log.info(f"  Change 29: round-2 routing banded on {_n_r2} measured lanes")
     if XDOCK_ENABLED:
         _n_xd = 0
         for (_g, _d, _c) in sorted(XDOCK_PAIR):
@@ -2530,11 +2475,11 @@ if BYPASS:
                        notes=f"Change 29: cross-dock {HUB_CODE[_g]}->{HUB_CODE[_d]} {_c} held to "
                              f"measured {_v:,} EA +/- {SORT_BAND:.0%}")
                 _n_xd += 1
-        print(f"  Change 29: cross-dock banded on {_n_xd} measured lanes")
-    print(f"  Change 25: {len(_byp_arcs)} direct arcs"
-          + (f", Conditional Min {BYPASS_MIN_SHIPMENT:,} EA each"
+        log.info(f"  Change 29: cross-dock banded on {_n_xd} measured lanes")
+    log.info(f"  Change 25: {len(_byp_arcs)} direct arcs"
+             + (f", Conditional Min {BYPASS_MIN_SHIPMENT:,} EA each"
              if INTERSTATE_BYPASS == "min_truckload" else ", cost decides the volume")
-          + (f", capped at {BYPASS_MAX_SHARE:.0%} of arrivals" if BYPASS_MAX_SHARE else ""))
+             + (f", capped at {BYPASS_MAX_SHARE:.0%} of arrivals" if BYPASS_MAX_SHARE else ""))
 
 # ── Change 29b: a Min may not exceed what its own arcs can physically carry ───────────
 # NEO reported three violated Mins (Bayswater 727 of 727, Melbourne North, Sunshine West) and
@@ -2563,8 +2508,8 @@ for _r in fc_rows:
         f"would report this as a violation. A site that also delivers keeps its own zones' "
         f"freight on site with no lane, so the band must be based on what travels.")
     _n_chk += 1
-print(f"  Change 29b: {_n_chk} product-named Min constraints checked against reachable demand "
-      f"— all satisfiable on the lanes that exist")
+log.info(f"  Change 29b: {_n_chk} product-named Min constraints checked against reachable demand "
+         f"— all satisfiable on the lanes that exist")
 
 write_csv(pd.DataFrame(fc_rows).reindex(columns=FC_COLS), "FlowConstraints")
 
@@ -2724,10 +2669,10 @@ if MANUAL_SORT_SHARE > 0:
             f"hand sort but WC_SORT_MANUAL holds {have:,.0f}. Lower MANUAL_SORT_SHARE or raise "
             f"the SORT_MANUAL rate in machine_rates.csv.")
     _mtot = sum(MANUAL_FLOOR.values())
-    print(f"  Change 39: manual-sort floor {MANUAL_SORT_SHARE:.0%} of DELIVERED volume "
-          f"= {_hub_share:.1%} of round-1 hub sort -> {_mtot:,.0f} EA/day by hand ("
-          + ", ".join(f"{k} {v:,.0f}" for k, v in sorted(MANUAL_FLOOR.items()))
-          + f") = {_mtot / D_TOTAL:.2%} of the {D_TOTAL:,} EA delivered")
+    log.info(f"  Change 39: manual-sort floor {MANUAL_SORT_SHARE:.0%} of DELIVERED volume "
+             f"= {_hub_share:.1%} of round-1 hub sort -> {_mtot:,.0f} EA/day by hand ("
+             + ", ".join(f"{k} {v:,.0f}" for k, v in sorted(MANUAL_FLOOR.items()))
+             + f") = {_mtot / D_TOTAL:.2%} of the {D_TOTAL:,} EA delivered")
 
 if MIX_FAMILIES or MANUAL_FLOOR:
     # ── the two checks the 2026-08-13 run earned ─────────────────────────────────────
@@ -2770,16 +2715,16 @@ if MIX_FAMILIES or MANUAL_FLOOR:
     write_csv(pd.DataFrame(udv_rows).reindex(columns=UDV_COLS), "UserDefinedVariables")
     write_csv(pd.DataFrame(udc_rows).reindex(columns=UDC_COLS), "UserDefinedConstraints")
     write_csv(pd.DataFrame(grp, columns=GROUP_COLS), "Groups")     # rewritten with the mix groups
-    print(f"  Change 33: mix bounded for {', '.join(sorted(MIX_FAMILIES)) or 'nothing'} — "
-          f"{len(udv_rows)} variable rows, {len(udc_rows)} constraints, "
-          f"{len(MIX_FAMILIES)} product groups")
-    print(f"    {'family':<11}{'site':<6}{'method':<19}{'band':<16}{'needs':>10}{'dock':>12}"
-          f"{'family vol':>12}")
+    log.info(f"  Change 33: mix bounded for {', '.join(sorted(MIX_FAMILIES)) or 'nothing'} — "
+             f"{len(udv_rows)} variable rows, {len(udc_rows)} constraints, "
+             f"{len(MIX_FAMILIES)} product groups")
+    log.info(f"    {'family':<11}{'site':<6}{'method':<19}{'band':<16}{'needs':>10}{'dock':>12}"
+             f"{'family vol':>12}")
     for fam, code, m, lo, hi, need, have, vol in _mix_report:
-        print(f"    {fam:<11}{code:<6}{m:<19}{lo:>5.0%}-{hi:<10.0%}{need:>10,.0f}{have:>12,.0f}"
-              f"{vol:>12,.0f}")
-    print(f"    constraint names carry the {UDC_PREFIX!r} prefix — a constraint may not reuse a "
-          f"variable name (NEO drops the row, silently)")
+        log.info(f"    {fam:<11}{code:<6}{m:<19}{lo:>5.0%}-{hi:<10.0%}{need:>10,.0f}{have:>12,.0f}"
+                 f"{vol:>12,.0f}")
+    log.info(f"    constraint names carry the {UDC_PREFIX!r} prefix — a constraint may not reuse a "
+             f"variable name (NEO drops the row, silently)")
 else:
     # The notebook OWNS its output folder. Leaving a previous run's mix tables behind would put
     # constraints into Cosmic Frog that this build no longer intends — the half-written-folder
@@ -2788,11 +2733,11 @@ else:
               if (OUT / f"{n}.csv").exists()]
     for _n in _stale:
         (OUT / f"{_n}.csv").unlink()
-    print("  Change 33/39: work-centre mix bounds and manual floor OFF "
-          f"(INTERSTATE_UNLOAD={INTERSTATE_UNLOAD}, VIC_UNLOAD={VIC_UNLOAD}, "
-          f"MANUAL_SORT_SHARE={MANUAL_SORT_SHARE}) — "
-          "no UserDefined* tables written, build is byte-identical"
-          + (f"; removed {len(_stale)} stale table(s) from a previous bounded run" if _stale else ""))
+    log.info("  Change 33/39: work-centre mix bounds and manual floor OFF "
+             f"(INTERSTATE_UNLOAD={INTERSTATE_UNLOAD}, VIC_UNLOAD={VIC_UNLOAD}, "
+             f"MANUAL_SORT_SHARE={MANUAL_SORT_SHARE}) — "
+             "no UserDefined* tables written, build is byte-identical"
+             + (f"; removed {len(_stale)} stale table(s) from a previous bounded run" if _stale else ""))
 
 # --------------------------------------------------------------------------------------
 # ## 9b. Change 28 — chain 2 IS the measurement; verify it
@@ -2815,10 +2760,10 @@ for _f in SD_FAMS:                       # Change 46: and each band on its own
     assert _fo == FAM_TOT[_f], f"{FAM_LABEL[_f]} caps {_fo:,} != measured {FAM_TOT[_f]:,}"
 _int_out = int(_sc.loc[_sc.suppliername.str.startswith("SUP_INT_"), "supplycapacity"].sum())
 assert _int_out >= IN_TOT, "interstate caps below the measured arrivals"
-print(f"  supplier caps: kept at depot {_stage_out:,} = measured | "
-      + " | ".join(f"{FAM_LABEL[f]} {FAM_TOT[f]:,} = measured" for f in SD_FAMS)
-      + f" | interstate {_int_out:,} (vs flows {IN_TOT:,}; ceil per presentation + "
-        f"cross-dock shift)")
+log.info(f"  supplier caps: kept at depot {_stage_out:,} = measured | "
+         + " | ".join(f"{FAM_LABEL[f]} {FAM_TOT[f]:,} = measured" for f in SD_FAMS)
+         + f" | interstate {_int_out:,} (vs flows {IN_TOT:,}; ceil per presentation + "
+           f"cross-dock shift)")
 # The measurement, off the factors, so this line cannot go stale when OBS_COHORT moves.
 # Weight the SHARES by measured demand — not by obs_joint's `articles`, which counts only the
 # cells that survived the flavour filters and so understates whichever family lost most cells
@@ -2840,10 +2785,10 @@ for p in sorted(DELIVERY_PUD_SET):
         sum(int(D_pud_class.loc[p, c]) for c in CLASSES), 1)
     assert abs(_stg - _meas) < 0.5, f"{p}: OriginMix stage {_stg} vs measured {_meas:.2f}"
 _MODEL = dict({"STG": STAGE_TOT}, **{f: FAM_TOT[f] for f in ARR_FAMS})
-print("  OriginMix: every depot's stage share equals the measurement; four-way split "
-      + " / ".join(f"{100*_MODEL[f]/D_TOTAL:.1f}% {FAM_LABEL[f]}" for f in ("STG",) + ARR_FAMS))
-print("    scans, same cohort:                                        "
-      + " / ".join(f"{100*_MEAS[f]:.1f}% {FAM_LABEL[f]}" for f in ("STG",) + ARR_FAMS))
+log.info("  OriginMix: every depot's stage share equals the measurement; four-way split "
+         + " / ".join(f"{100*_MODEL[f]/D_TOTAL:.1f}% {FAM_LABEL[f]}" for f in ("STG",) + ARR_FAMS))
+log.info("    scans, same cohort:                                        "
+         + " / ".join(f"{100*_MEAS[f]:.1f}% {FAM_LABEL[f]}" for f in ("STG",) + ARR_FAMS))
 # ── Change 29: STAGE 4 — where the model despatches from, against where the scans do ──
 # This matrix is deliberately NOT pinned. Stages 1-3 (arrivals, cross-dock, round-2 routing) fix
 # where a parcel is sorted last; the depot split is then set by the origin mix, which is itself
@@ -2888,12 +2833,12 @@ _dev.sort(reverse=True)
 # row is modelled as arriving from elsewhere while the scans show it arriving locally. That is
 # the floor's cost showing up where it should — in a check, by name.
 _wv = sum(_d * _t for _d, _c, _h, _p, _t in _dev) / max(sum(_t for *_r, _t in _dev), 1)
-print(f"  Change 29 stage-4 check (NOT pinned — two independent measurements meeting): modelled "
-      f"last-sort-site -> depot split vs measured over {len(_dev)} cells — volume-weighted mean "
-      f"absolute deviation {_wv:.1%} (unweighted {sum(d for d, *_ in _dev)/max(len(_dev),1):.1%}), "
-      f"worst " + ", ".join(f"{_c}/{_h}->{_short(_p)} {_d:.0%}"
-                            for _d, _c, _h, _p, _t in _dev[:3]))
-print("  Change 28 verification passed — chain 2 is the measurement")
+log.info(f"  Change 29 stage-4 check (NOT pinned — two independent measurements meeting): modelled "
+         f"last-sort-site -> depot split vs measured over {len(_dev)} cells — volume-weighted mean "
+         f"absolute deviation {_wv:.1%} (unweighted {sum(d for d, *_ in _dev)/max(len(_dev),1):.1%}), "
+         f"worst " + ", ".join(f"{_c}/{_h}->{_short(_p)} {_d:.0%}"
+                               for _d, _c, _h, _p, _t in _dev[:3]))
+log.info("  Change 28 verification passed — chain 2 is the measurement")
 
 # --------------------------------------------------------------------------------------
 # ## 10. Periods and elapsed time
@@ -2914,10 +2859,10 @@ if N_PERIODS > 1:
         ["PM", "Include", 2, "12pm to 12am. Evening collection peak, hub processing from 9pm"],
     ], columns=["periodname", "status", "periodsequence", "notes"])
     write_csv(periods, "Periods")
-    print("  NOTE: Periods schema is assumed — confirm the column names against Anura before loading.")
+    log.info("  NOTE: Periods schema is assumed — confirm the column names against Anura before loading.")
 else:
     (OUT / "Periods.csv").unlink(missing_ok=True)     # do not leave a stale table behind
-    print(f"  single period '{PERIODS[0]}' — no Periods.csv written (periods off, Change 13)")
+    log.info(f"  single period '{PERIODS[0]}' — no Periods.csv written (periods off, Change 13)")
 
 # ── Elapsed time reference for the UDV (doc section 5.2) ───────────────────
 LEG_HOURS = {
@@ -2934,13 +2879,13 @@ _local = sum(LEG_HOURS[k] for k in ["collection dwell", "first mile transit", "u
                                     "delivery run"])
 if HUB_SORT_ROUNDS == 2:      # a second sort at a second hub, and the hop to reach it
     _local += LEG_HOURS["sort dwell"] + LEG_HOURS["linehaul transit (metro)"]
-    print(f"  (+{LEG_HOURS['sort dwell'] + LEG_HOURS['linehaul transit (metro)']:.1f} h for the "
-          f"second hub sort round and the hop between the two hubs)")
+    log.info(f"  (+{LEG_HOURS['sort dwell'] + LEG_HOURS['linehaul transit (metro)']:.1f} h for the "
+             f"second hub sort round and the hop between the two hubs)")
 _inter = _local - LEG_HOURS["linehaul transit (metro)"] + LEG_HOURS["linehaul transit (interstate)"]
-print(f"  locally lodged, end to end   {_local:>5.1f} h")
-print(f"  interstate, end to end       {_inter:>5.1f} h")
-print(f"  -> interstate cannot satisfy a same-day promise. The model derives it rather than "
-      f"being told, exactly as the document argues (FAQ 5).")
+log.info(f"  locally lodged, end to end   {_local:>5.1f} h")
+log.info(f"  interstate, end to end       {_inter:>5.1f} h")
+log.info(f"  -> interstate cannot satisfy a same-day promise. The model derives it rather than "
+         f"being told, exactly as the document argues (FAQ 5).")
 
 # --------------------------------------------------------------------------------------
 # ## 10b. What the two periods do and do not do — read before using this
@@ -2958,10 +2903,10 @@ print(f"  -> interstate cannot satisfy a same-day promise. The model derives it 
 
 # ── Period mechanics: what is and is not enforced ──────────────────────────
 if N_PERIODS == 1:
-    print(f"  ONE period ('{PERIODS[0]}') — the AM/PM split is off, so none of the period mechanics")
-    print("  below apply. Capacity is rate x the operating window across the whole day, and nothing")
-    print("  sequences the day: this is the same single-day steady state the current model runs.")
-    print("  Set N_PERIODS = 2 to bring the two-period analysis (and this diagnostic) back.")
+    log.info(f"  ONE period ('{PERIODS[0]}') — the AM/PM split is off, so none of the period mechanics")
+    log.info("  below apply. Capacity is rate x the operating window across the whole day, and nothing")
+    log.info("  sequences the day: this is the same single-day steady state the current model runs.")
+    log.info("  Set N_PERIODS = 2 to bring the two-period analysis (and this diagnostic) back.")
 else:
     _period_aware = []
     for t in ["CustomerDemand", "FlowConstraints", "SupplierCapabilities", "WorkCenters",
@@ -2969,48 +2914,48 @@ else:
               "ReplenishmentPolicies", "Facilities"]:
         cols = pd.read_csv(REF / f"{t}.csv", nrows=0).columns if (REF / f"{t}.csv").exists() else []
         _period_aware.append((t, any("period" in c.lower() for c in cols)))
-    print("  period column present?")
+    log.info("  period column present?")
     for t, ok in _period_aware:
-        print(f"    {t:<26} {'YES' if ok else 'no'}")
+        log.info(f"    {t:<26} {'YES' if ok else 'no'}")
 
-    print()
-    print("  1. CAPACITY IS PER PERIOD, NOT PER DAY.")
-    print(f"     WorkCenters has no period column, so one throughput number applies in every period.")
-    print(f"     Capacity here is rate x {AVAILABLE_HOURS_PER_DAY['SORT']}h / {len(PERIODS)} periods = "
-          f"rate x {window('SORT')}h per period. An ASYMMETRIC window (4 h morning wave vs 5 h evening")
-    print("     collection) cannot be expressed. Splitting a machine into _AM and _PM work centres does")
-    print("     NOT fix it — nothing binds either to a period, so both become usable in both periods and")
-    print("     the capacity doubles. Question for Optilogic: does Anura have a period-specific")
-    print("     capacity table? If yes, this becomes asymmetric and the even split goes away.")
-    print()
-    print("  2. NOTHING SEQUENCES THE DAY.")
-    print("     Flow conservation holds WITHIN a period. Lanes carry no transit time, so volume that")
-    print("     leaves in PM arrives in PM, and there is no carryover variable between periods")
-    print("     (InventoryPolicies has no period column either). So today a parcel can be collected,")
-    print("     linehauled, sorted and delivered inside the SAME period.")
-    print("     Demand is the only period-stamped quantity, so it is the only thing pulling flow into a")
-    print("     period. Collection is not gated at all:")
+    log.info("")
+    log.info("  1. CAPACITY IS PER PERIOD, NOT PER DAY.")
+    log.info(f"     WorkCenters has no period column, so one throughput number applies in every period.")
+    log.info(f"     Capacity here is rate x {AVAILABLE_HOURS_PER_DAY['SORT']}h / {len(PERIODS)} periods = "
+             f"rate x {window('SORT')}h per period. An ASYMMETRIC window (4 h morning wave vs 5 h evening")
+    log.info("     collection) cannot be expressed. Splitting a machine into _AM and _PM work centres does")
+    log.info("     NOT fix it — nothing binds either to a period, so both become usable in both periods and")
+    log.info("     the capacity doubles. Question for Optilogic: does Anura have a period-specific")
+    log.info("     capacity table? If yes, this becomes asymmetric and the even split goes away.")
+    log.info("")
+    log.info("  2. NOTHING SEQUENCES THE DAY.")
+    log.info("     Flow conservation holds WITHIN a period. Lanes carry no transit time, so volume that")
+    log.info("     leaves in PM arrives in PM, and there is no carryover variable between periods")
+    log.info("     (InventoryPolicies has no period column either). So today a parcel can be collected,")
+    log.info("     linehauled, sorted and delivered inside the SAME period.")
+    log.info("     Demand is the only period-stamped quantity, so it is the only thing pulling flow into a")
+    log.info("     period. Collection is not gated at all:")
     _dem = pd.read_csv(OUT / "CustomerDemand.csv")
     _by = _dem.groupby("periodname")["quantity"].sum()
     for per in PERIODS:
-        print(f"       {per}: demand {_by.get(per, 0):>9,}  <- pulls the whole chain, collection included")
-    print()
-    print("     That is backwards from the real operation (collect PM, linehaul overnight, deliver AM next")
-    print("     day) and it means the two periods do not separate the two peaks. They split one day in two.")
-    print()
-    print("  TO MAKE THE PERIODS BITE, two things are needed together:")
-    print("    a) Gate collection and delivery by period using FlowConstraints (the only period-aware")
-    print("       lever we have): Max 0 on pickup in AM, Max 0 on next-day delivery in PM.")
-    print("    b) An EXPLICIT overnight handover. With no carryover variable, PM sortation output is not")
-    print("       available in AM — so the solver would just sort in AM instead, leaving the PM window")
-    print("       idle. The handover has to be modelled the way we already model local staging: a")
-    print("       supplier that provides AM-ready Despatch with capacity equal to the previous PM's")
-    print("       sorted output (steady state: what crosses midnight tonight = what crossed last night).")
-    print()
-    print("  NOTE ON THE DOCUMENT: FAQ 3 says hub processing crossing midnight 'nets out and the model")
-    print("  does not need to track the handover'. That holds for volume BALANCE but not for CAPACITY")
-    print("  TIMING. Without (b), the periods constrain nothing. (a) without (b) is infeasible.")
-    print("  Neither is implemented here — it changes the model's economics and needs a decision.")
+        log.info(f"       {per}: demand {_by.get(per, 0):>9,}  <- pulls the whole chain, collection included")
+    log.info("")
+    log.info("     That is backwards from the real operation (collect PM, linehaul overnight, deliver AM next")
+    log.info("     day) and it means the two periods do not separate the two peaks. They split one day in two.")
+    log.info("")
+    log.info("  TO MAKE THE PERIODS BITE, two things are needed together:")
+    log.info("    a) Gate collection and delivery by period using FlowConstraints (the only period-aware")
+    log.info("       lever we have): Max 0 on pickup in AM, Max 0 on next-day delivery in PM.")
+    log.info("    b) An EXPLICIT overnight handover. With no carryover variable, PM sortation output is not")
+    log.info("       available in AM — so the solver would just sort in AM instead, leaving the PM window")
+    log.info("       idle. The handover has to be modelled the way we already model local staging: a")
+    log.info("       supplier that provides AM-ready Despatch with capacity equal to the previous PM's")
+    log.info("       sorted output (steady state: what crosses midnight tonight = what crossed last night).")
+    log.info("")
+    log.info("  NOTE ON THE DOCUMENT: FAQ 3 says hub processing crossing midnight 'nets out and the model")
+    log.info("  does not need to track the handover'. That holds for volume BALANCE but not for CAPACITY")
+    log.info("  TIMING. Without (b), the periods constrain nothing. (a) without (b) is infeasible.")
+    log.info("  Neither is implemented here — it changes the model's economics and needs a decision.")
 
 # --------------------------------------------------------------------------------------
 # ## 11. Summary
@@ -3027,7 +2972,7 @@ _missing = [t for t in REQUIRED_TABLES if t not in tables]
 assert not _missing, f"these Anura tables were never written: {_missing}"
 _empty = [t for t in REQUIRED_TABLES if sum(1 for _ in open(OUT / f"{t}.csv", encoding="utf-8-sig")) <= 1]
 assert not _empty, f"these Anura tables are header-only: {_empty}"
-print(f"  all {len(REQUIRED_TABLES)} required Anura tables present and non-empty")
+log.info(f"  all {len(REQUIRED_TABLES)} required Anura tables present and non-empty")
 # Change 33: the mix tables are OPTIONAL — present only when a family is bounded. Assert the
 # pair moves together, so a half-written mix can never reach Cosmic Frog.
 OPTIONAL_TABLES = ["UserDefinedVariables", "UserDefinedConstraints"]
@@ -3037,19 +2982,19 @@ assert len(_opt) in (0, len(OPTIONAL_TABLES)), \
 assert bool(_opt) == bool(MIX_FAMILIES), \
     f"Change 33: mix tables {'missing' if MIX_FAMILIES else 'left over from an earlier run'}"
 if _opt:
-    print(f"  + {len(OPTIONAL_TABLES)} optional Change-33 mix tables")
+    log.info(f"  + {len(OPTIONAL_TABLES)} optional Change-33 mix tables")
 sizes = {t: sum(1 for _ in open(OUT / f"{t}.csv", encoding="utf-8-sig")) - 1 for t in tables}
-print(f"{len(tables)} tables written to {OUT.name}/")
+log.info(f"{len(tables)} tables written to {OUT.name}/")
 for t in tables:
-    print(f"    {t:<32} {sizes[t]:>8,}")
-print()
-print("Against the current single-stream model:")
+    log.info(f"    {t:<32} {sizes[t]:>8,}")
+log.info("")
+log.info("Against the current single-stream model:")
 for label, now, then in [("products", 26, len(products)),
                          ("demand rows", 2102, len(demand)),
                          ("work centres", 51, len(work_centers)),
                          ("BOM rows", 24, len(bill_of_materials)),
                          ("lanes", 3446, len(transportation_policies))]:
-    print(f"    {label:<16} {now:>8,}  ->  {then:>8,}   ({then/now:.1f}x)")
+    log.info(f"    {label:<16} {now:>8,}  ->  {then:>8,}   ({then/now:.1f}x)")
 
 # --------------------------------------------------------------------------------------
 # ## 12. The old open decisions — where they went
@@ -3088,3 +3033,7 @@ for label, now, then in [("products", 26, len(products)),
 # sorting is priced too cheap. (3) `HUB_DOCK_SCALE` at SWP/MNP/BAY is the ops number to watch:
 # those buildings now carry measured linehaul intake at docks sized for vans.
 # --------------------------------------------------------------------------------------
+
+# The phase report card — what this step actually wrote, read back off the folder itself.
+# One line here, the block in _report.py, so this file stays a builder.
+_report.s2a(log=log)

@@ -48,7 +48,11 @@ import csv
 import os
 import shutil
 
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
 from _paths import DATA_ROOT, FINAL_OUT, PRESPLIT
+
+log = get_logger(__file__)
 
 HERE = str(DATA_ROOT)
 MODEL = str(FINAL_OUT)
@@ -83,8 +87,8 @@ def main(argv=None):
         for t in TABLES:
             shutil.copy(os.path.join(SAVE, f"{t}.csv"), os.path.join(MODEL, f"{t}.csv"))
         shutil.rmtree(SAVE)
-        print(f"  restored {len(TABLES)} tables from {os.path.relpath(SAVE, HERE)}")
-        print("  NOW RE-RUN  uv run python post_process/add_no_relay_constraints.py")
+        log.info(f"  restored {len(TABLES)} tables from {os.path.relpath(SAVE, HERE)}")
+        log.info("  NOW RE-RUN  uv run python post_process/add_no_relay_constraints.py")
         return
 
     # THE SAVE-DIR OUTLIVES A REBUILD, AND THAT IS A TRAP. `outputs/.presplit` says "already
@@ -97,8 +101,8 @@ def main(argv=None):
         if any(p.endswith(SUFFIX) for p in _now):
             raise SystemExit(f"  already split ({os.path.relpath(SAVE, HERE)} exists) — "
                              f"--restore first if you want to redo it")
-        print(f"  {os.path.relpath(SAVE, HERE)} is STALE — it survived a rebuild and the model in "
-              f"front of me carries no {SUFFIX} product. Discarding it and splitting afresh.")
+        log.info(f"  {os.path.relpath(SAVE, HERE)} is STALE — it survived a rebuild and the model in "
+                 f"front of me carries no {SUFFIX} product. Discarding it and splitting afresh.")
         shutil.rmtree(SAVE)
 
     tab = {t: load(t) for t in TABLES}
@@ -163,7 +167,7 @@ def main(argv=None):
     pol.extend(newpol)
 
     # ── 4 & 5. sourcing: the direct product from its own site, the R from round-2 sites ──
-    def resplit(name, origin_col, dest_col):
+    def resplit(name, origin_col):
         """Route the sourcing rows to the half that can actually make them, and delete the rest.
 
         ONE RULE: the ORIGIN must be able to MAKE what it ships. The own site keeps the direct
@@ -191,7 +195,7 @@ def main(argv=None):
             if p not in R:
                 keep.append(r)
                 continue
-            o, d = r[origin_col], r[dest_col]
+            o = r[origin_col]
             if o in direct[p]:
                 tgt = keep
             elif o in load2[p]:
@@ -207,21 +211,21 @@ def main(argv=None):
         tab[name] = (cols, keep + made)
         return len(rows), len(keep), len(made), why
 
-    rep = resplit("ReplenishmentPolicies", "sourcename", "facilityname")
-    trn = resplit("TransportationPolicies", "originname", "destinationname")
+    rep = resplit("ReplenishmentPolicies", "sourcename")
+    trn = resplit("TransportationPolicies", "originname")
 
     for t in TABLES:
         save(t, *tab[t])
 
-    print(f"  {len(split)} flavours split (13 direct-only flavours left alone)")
-    print(f"    Products               +{len(split)}")
-    print(f"    BillOfMaterials        +{len(newbom)}  (driver recipe for the R product)")
-    print(f"    ProductionPolicies      {n_point} LOAD2 rows re-pointed, +{len(newpol)} driver rows")
+    log.info(f"  {len(split)} flavours split (13 direct-only flavours left alone)")
+    log.info(f"    Products               +{len(split)}")
+    log.info(f"    BillOfMaterials        +{len(newbom)}  (driver recipe for the R product)")
+    log.info(f"    ProductionPolicies      {n_point} LOAD2 rows re-pointed, +{len(newpol)} driver rows")
     for nm, (was, kept, moved, why) in (("ReplenishmentPolicies", rep),
                                         ("TransportationPolicies", trn)):
-        print(f"    {nm:<22} {was:>6} -> {kept + moved:>6}   "
-              f"{kept} direct + {moved} round-2;  "
-              f"dropped {why['origin']} (origin can make neither half)")
+        log.info(f"    {nm:<22} {was:>6} -> {kept + moved:>6}   "
+                 f"{kept} direct + {moved} round-2;  "
+                 f"dropped {why['origin']} (origin can make neither half)")
     # ── THE GUARD: can the LAST SOLVE still be routed? ───────────────────────────────
     # Trimming sourcing rows is how this file works, and trimming one row too many makes the
     # model INFEASIBLE with no constraint violated — NEO reports a structural break, not a rule
@@ -250,15 +254,18 @@ def main(argv=None):
             if (o, d, pr) not in trn_k or (d, pr, o) not in rep_k:
                 lost[(o, d, pr)] = lost.get((o, d, pr), 0.0) + q
         if lost:
-            print(f"\n  !! {sum(lost.values()):,.0f} EA of {tot:,.0f} that the LAST SOLVE carried has no "
-                  f"lane any more, on {len(lost)} arcs. Expect INFEASIBLE:")
+            log.info(f"\n  !! {sum(lost.values()):,.0f} EA of {tot:,.0f} that the LAST SOLVE carried has no "
+                     f"lane any more, on {len(lost)} arcs. Expect INFEASIBLE:")
             for (o, d, pr), v in sorted(lost.items(), key=lambda x: -x[1])[:6]:
-                print(f"       {o} -> {d}  {pr}  {v:,.0f}")
+                log.info(f"       {o} -> {d}  {pr}  {v:,.0f}")
         else:
-            print(f"\n  guard: all {tot:,.0f} EA the last solve carried is still routable")
+            log.info(f"\n  guard: all {tot:,.0f} EA the last solve carried is still routable")
 
-    print(f"  pre-split tables saved to {os.path.relpath(SAVE, HERE)}  (--restore puts them back)")
-    print("  NOW RE-RUN  uv run python post_process/add_no_relay_constraints.py")
+    log.info(f"  pre-split tables saved to {os.path.relpath(SAVE, HERE)}  (--restore puts them back)")
+    log.info("  NOW RE-RUN  uv run python post_process/add_no_relay_constraints.py")
+
+    # The phase report card — see _report.py.
+    _report.s3a(log=log)
 
 
 if __name__ == "__main__":

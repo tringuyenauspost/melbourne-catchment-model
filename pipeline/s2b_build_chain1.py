@@ -39,7 +39,11 @@ import warnings
 
 import pandas as pd
 
-from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, DATA_ROOT as REPO, FASS, RAW
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
+from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, FASS, RAW
+
+log = get_logger(__file__)
 OUT.mkdir(parents=True, exist_ok=True)
 
 _CAST = {"int": int, "float": float, "str": str, "bool": lambda x: str(x).strip() == "True"}
@@ -50,7 +54,7 @@ def d1(name):
 
 def write(df, name):
     df.to_csv(OUT / f"{name}.csv", index=False, encoding="utf-8-sig")
-    print(f"  ✓ {name+'.csv':<32} {len(df):>7,} rows")
+    log.info(f"  ✓ {name+'.csv':<32} {len(df):>7,} rows")
 
 def largest_remainder(total, weights):
     """Split an integer across weights so the parts sum to it EXACTLY. Used everywhere a share
@@ -132,23 +136,22 @@ def frame(name, rows):
 # sites.csv answers "which buildings, which roles, which sort, which collect". It cannot answer
 # these four, so they are declared here rather than hidden in a copied table.
 #
-# 1. the geojson spells a van arm differently from sites.csv's building
-GEOJSON_SITE = {
-    "Bayswater Van Operations":       "PUD_Bayswater",
-    "Dandenong South Van Operations": "PUD_Dandenong_South",
-    "Melbourne North Van Operations": "PUD_Melbourne_North",
-    "Oakleigh South Van Operations":  "PUD_Oakleigh_South",
-    "Sunshine West Van Services":     "PUD_Sunshine_West",
-    "Dandenong Transport Facility":   "PUD_Dandenong_Transport",
-    "Melbourne Transport":            "PUD_Melbourne_Transport",
-}
+# Change 51: 1 and 2 were literals here AND, word for word, in chain 2. They are columns of
+# sites.csv now — `van_arm` and `origin_cluster` — so the two entities cannot come to disagree
+# about which building collects what, or about what the pickup it collects is called. Ordered by
+# building, then by node, so the tables this drives do not reshuffle when a row moves in the
+# registry — the transport facilities are services rather than buildings and sort last, which is
+# how the rest of this file already treats them.
+# 1. the geojson spells a van arm differently from sites.csv's building — `van_arm` says how
+_SITES = pd.read_csv(FASS / "sites.csv")
+_SITES = _SITES.iloc[sorted(range(len(_SITES)),
+                            key=lambda i: (_SITES.role.iloc[i] == "transport",
+                                           _SITES.node.iloc[i]))]
+GEOJSON_SITE = {r.van_arm: r.node
+                for r in _SITES[_SITES.van_arm.notna()].itertuples()}
 # 2. the origin CLUSTER each collection site feeds — the token every product name carries
-ORIGIN_TAG = {
-    "PUD_Bayswater": "OUTER_EAST",       "PUD_Dandenong_South": "DANDENONG",
-    "PUD_Melbourne_North": "NORTH",      "PUD_Oakleigh_South": "SOUTH_EAST",
-    "PUD_Sunshine_West": "WEST",         "PUD_Dandenong_Transport": "DANDENONG_TR",
-    "PUD_Melbourne_Transport": "INNER",
-}
+ORIGIN_TAG = {r.node: r.origin_cluster
+              for r in _SITES[_SITES.origin_cluster.notna()].itertuples()}
 # 3. (was a separate CLS_HUBS list) — which hubs sort which class is now DERIVED from the
 #    despatch dials, so there is one source of truth. The frozen build kept a wider list and it
 #    left seven EP_*_Despatch1_TPF products with a recipe at TPF, no replenishment lane to carry
@@ -236,7 +239,7 @@ def generate():
     for _s in FIRST:
         _byveh.setdefault(PICKUP_MODE.get(_s, DEFAULT_PICKUP), []).append(short(_s))
     if len(_byveh) > 1:
-        print("\n  leg-1 pickup vehicle: " + " | ".join(
+        log.info("\n  leg-1 pickup vehicle: " + " | ".join(
             f"{m} ({MODE_OF[m].capacity_ea:,} EA @ ${MODE_OF[m].rate_per_km}/km): "
             f"{', '.join(sorted(v))}" for m, v in sorted(_byveh.items())))
     assert DIRECT <= set(FIRST), (
@@ -261,8 +264,8 @@ def generate():
             f"Despatch1 product name is built from it")
     _off = sorted({short(h) for h in SORT1 if h not in HUBS})
     if _off:
-        print(f"\n  round-1 sort happens OFF-HUB at {', '.join(_off)} — "
-              f"first_mile_despatch.csv routes collection there instead of to a hub")
+        log.info(f"\n  round-1 sort happens OFF-HUB at {', '.join(_off)} — "
+                 f"first_mile_despatch.csv routes collection there instead of to a hub")
 
     # ── chain 2 supplies the shared identity and where pickup terminates ──────────────
     _fac2 = pd.read_csv(CHAIN2_OUT / "Facilities.csv")
@@ -427,18 +430,18 @@ def generate():
         f"the hubs — the carve-out cannot be larger than the sink it comes out of")
     PDO_CLS = largest_remainder(PDO_TOT, {c: MTERM[c] + KEEP[c] for c in CLASSES})
 
-    print(f"\n  chain 1 GENERATED from inputs/ ({d1('MODEL_BASIS')}), no previous build read:")
-    print(f"    {len(gj):,} catchments from {d1('CATCHMENT_GEOJSON')[:38]}… over {len(FIRST)} sites")
-    print(f"    metro pickup {METRO_P:,} ({FACTOR:.2f} x each site's own 2025 peak)"
-          f"  +  regional {REG_P:,} at {short(REG_HUB)}  =  P {TOTAL_P:,}")
-    print(f"    terminate: kept at depot {sum(KEEP.values()):,} | Vic Metro to Metro "
-          f"{sum(MTERM.values()):,} | PDO terminate {PDO_TOT:,} | interstate {INTER - PDO_TOT:,} "
-          f"| regional {REG_P:,}")
-    print(f"      PDO terminate is {PDO_F:.2f} x (Vic Metro to Metro + kept at depot) carved out "
-          f"of the {INTER:,} that used to leave as one interstate sink, at the same hubs")
-    print(f"      sinks read off chain 2's SupplierCapabilities — "
-          f"{len({s for s, _ in MET_SITE})} metro sites, {len({p for p, _ in KEEP_PUD})} depots; "
-          f"chain 2 also stages {_offsite:,} EA where chain 1 never collects")
+    log.info(f"\n  chain 1 GENERATED from inputs/ ({d1('MODEL_BASIS')}), no previous build read:")
+    log.info(f"    {len(gj):,} catchments from {d1('CATCHMENT_GEOJSON')[:38]}… over {len(FIRST)} sites")
+    log.info(f"    metro pickup {METRO_P:,} ({FACTOR:.2f} x each site's own 2025 peak)"
+             f"  +  regional {REG_P:,} at {short(REG_HUB)}  =  P {TOTAL_P:,}")
+    log.info(f"    terminate: kept at depot {sum(KEEP.values()):,} | Vic Metro to Metro "
+             f"{sum(MTERM.values()):,} | PDO terminate {PDO_TOT:,} | interstate {INTER - PDO_TOT:,} "
+             f"| regional {REG_P:,}")
+    log.info(f"      PDO terminate is {PDO_F:.2f} x (Vic Metro to Metro + kept at depot) carved out "
+             f"of the {INTER:,} that used to leave as one interstate sink, at the same hubs")
+    log.info(f"      sinks read off chain 2's SupplierCapabilities — "
+             f"{len({s for s, _ in MET_SITE})} metro sites, {len({p for p, _ in KEEP_PUD})} depots; "
+             f"chain 2 also stages {_offsite:,} EA where chain 1 never collects")
 
     # ══ 4. the demand rows ════════════════════════════════════════════════════════════
     rows, hub_in = [], {h: 0 for h in SORT1}
@@ -606,8 +609,8 @@ def generate():
                 "notes": "3c linehaul: sorting hub -> the building chain 2 collects it at"})
     T["TransportationPolicies"] = frame("TransportationPolicies", leg1 + leg2 + leg3)
     T["TransportationModes"] = pd.read_csv(CHAIN2_OUT / "TransportationModes.csv")
-    print(f"    Vic Metro to Metro: {moved:,} EA of the {sum(MTERM.values()):,} is collected at "
-          f"a building other than the one that sorted it, so it books a leg (leg 3c)")
+    log.info(f"    Vic Metro to Metro: {moved:,} EA of the {sum(MTERM.values()):,} is collected at "
+             f"a building other than the one that sorted it, so it books a leg (leg 3c)")
 
     # the pins
     # The pin says "this much WAS collected from these catchments". It has always named the
@@ -725,9 +728,13 @@ _P = int(pd.to_numeric(T["FlowConstraints"].constraintvalue).sum())
 _d = T["CustomerDemand"]
 _by = {k: int(_d.loc[_d.customername.str.startswith(f"CZ_{k}"), "quantity"].sum())
        for k in ("Interstate", "PdoTerm", "LocalTerm", "MetroTerm", "Regional")}
-print(f"\n  chain-1 balance: P {_P:,} = " + " + ".join(f"{k} {v:,}" for k, v in _by.items() if v)
-      + ("   OK" if _P == sum(_by.values()) else f"   MISMATCH ({_P - sum(_by.values()):+,})"))
+log.info(f"\n  chain-1 balance: P {_P:,} = " + " + ".join(f"{k} {v:,}" for k, v in _by.items() if v)
+         + ("   OK" if _P == sum(_by.values()) else f"   MISMATCH ({_P - sum(_by.values()):+,})"))
 assert _P == sum(_by.values()), "chain-1 balance broken"
-print(f"  entity: {len(T['Products'])} products, {len(T['ProductionPolicies'])} production rows, "
-      f"{len(T['WorkCenters'])} work centres, "
-      f"{T['Customers'].customername.nunique()} sinks — generated from inputs/")
+log.info(f"  entity: {len(T['Products'])} products, {len(T['ProductionPolicies'])} production rows, "
+         f"{len(T['WorkCenters'])} work centres, "
+         f"{T['Customers'].customername.nunique()} sinks — generated from inputs/")
+
+# The phase report card — what this step actually wrote, read back off the folder itself.
+# One line here, the block in _report.py, so this file stays a builder.
+_report.s2b(log=log)

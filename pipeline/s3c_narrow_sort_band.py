@@ -48,9 +48,12 @@ import os
 import re
 from collections import defaultdict
 
-from _paths import DATA_ROOT, FINAL_OUT
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
+from _paths import FINAL_OUT
 
-HERE = str(DATA_ROOT)
+log = get_logger(__file__)
+
 MODEL = str(FINAL_OUT)
 FC = os.path.join(MODEL, "FlowConstraints.csv")
 OLD_BAND = 0.05                        # what the notebook wrote, and what the notes say
@@ -110,8 +113,8 @@ def main(argv=None):
             f"despatching the result:\n     "
             + "\n     ".join(f"{o} -> {d}  {p}" for o, d, p in clash)
             + "\n     Those two patches disagree — fix before solving.")
-    print(f"  interaction check: {len(pairs)} banded lanes, none blocked by the "
-          f"{len(blocked)} no-relay Max-0 rows")
+    log.info(f"  interaction check: {len(pairs)} banded lanes, none blocked by the "
+             f"{len(blocked)} no-relay Max-0 rows")
 
     # ── rewrite each pair on its recovered centre and base ───────────────────────────
     changed, floor_old, floor_new, ceil_new = 0, 0.0, 0.0, 0.0
@@ -155,18 +158,21 @@ def main(argv=None):
         w.writerows(fc)
 
     nice = lambda f: f.replace("HUB_", "").replace("PUD_", "").replace("_", " ")   # noqa: E731
-    print(f"  band +/-{OLD_BAND:.1%} -> +/-{args.band:.1%} on {changed} lanes")
-    print(f"    round-2 FLOOR  {floor_old:,.0f} -> {floor_new:,.0f} EA   "
-          f"(the run solved 33,210 with the old floor)")
-    print(f"    round-2 CEILING          -> {ceil_new:,.0f} EA")
+    log.info(f"  band +/-{OLD_BAND:.1%} -> +/-{args.band:.1%} on {changed} lanes")
+    log.info(f"    round-2 FLOOR  {floor_old:,.0f} -> {floor_new:,.0f} EA   "
+             f"(the run solved 33,210 with the old floor)")
+    log.info(f"    round-2 CEILING          -> {ceil_new:,.0f} EA")
     by = defaultdict(lambda: [0.0, 0.0])
     for _o, d, _p, mn, mx, c in report:
         by[nice(d)][0] += mn
         by[nice(d)][1] += c
-    print(f"    {'second-sort site':<22}{'new floor':>11}{'band centre':>13}")
+    log.info(f"    {'second-sort site':<22}{'new floor':>11}{'band centre':>13}")
     for s in sorted(by, key=lambda x: -by[x][1]):
-        print(f"      {s:<20}{by[s][0]:>11,.0f}{by[s][1]:>13,.0f}")
-    print(f"  wrote {FC}")
+        log.info(f"      {s:<20}{by[s][0]:>11,.0f}{by[s][1]:>13,.0f}")
+    log.info(f"  wrote {FC}")
+
+    # The phase report card — see _report.py.
+    _report.s3c(log=log)
 
 
 if __name__ == "__main__":

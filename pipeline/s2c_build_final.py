@@ -40,8 +40,12 @@ import math
 from pathlib import Path
 import pandas as pd
 
+import _report                    # the phase report card — see _report.py
+from _log import get_logger      # every message in the build goes through here
 from _paths import (CHAIN1_OUT as IN1, CHAIN2_OUT as IN2, DATA_ROOT as REPO, FASS,
                     FINAL_OUT as OUT)
+
+log = get_logger(__file__)
 OUT.mkdir(parents=True, exist_ok=True)
 for p in (IN1, IN2):
     assert p.exists(), f"missing entity build: {p} — run its notebook first"
@@ -50,7 +54,7 @@ def r1(n): return pd.read_csv(IN1 / f"{n}.csv")
 def r2(n): return pd.read_csv(IN2 / f"{n}.csv")
 def write(df, name):
     df.to_csv(OUT / f"{name}.csv", index=False, encoding="utf-8-sig")
-    print(f"  ✓ {name+'.csv':<32} {len(df):>7,} rows")
+    log.info(f"  ✓ {name+'.csv':<32} {len(df):>7,} rows")
 
 def concat_disjoint(name, key):
     a, b = r1(name), r2(name)
@@ -70,7 +74,7 @@ _only1 = set(fac1.facilityname) - set(fac2.facilityname)
 assert not _only1, f"chain 1 names facilities chain 2 has never heard of: {sorted(_only1)}"
 _only2 = sorted(set(fac2.facilityname) - set(fac1.facilityname))
 if _only2:
-    print(f"  delivery-side only (chain 2 knows them, chain 1 has no pickup there): {_only2}")
+    log.info(f"  delivery-side only (chain 2 knows them, chain 1 has no pickup there): {_only2}")
 # Throughput caps: the SAME rule as WorkCenters below — each entity sized the building for its
 # own touches and the real building carries both, so the caps are SUMMED wherever both entities
 # declare one. Chain 1 declares a cap only for the sites it collects at (everything else is
@@ -87,15 +91,15 @@ for _i, _r in _fac.iterrows():
 if _sum:
     _ops = {r["pud"]: int(r["capacity_ea"]) for r in __import__("csv").DictReader(
         open(REPO / "inputs" / "factors_assumed" / "pud_capacity.csv", encoding="utf-8-sig"))}
-    print("  throughput caps = chain-2 delivery + chain-1 collection (the building carries both):")
+    log.info("  throughput caps = chain-2 delivery + chain-1 collection (the building carries both):")
     for _n, _d, _c, _t in sorted(_sum, key=lambda x: -x[3]):
         _o = _ops.get(_n)
         _vs = f"   vs ops {_o:,} = {_t/_o:.0%}" if _o else ""
-        print(f"    {_n:<26} {_d:>8,} + {_c:>8,} = {_t:>8,}{_vs}")
+        log.info(f"    {_n:<26} {_d:>8,} + {_c:>8,} = {_t:>8,}{_vs}")
     _above = [n for n, _, _, t in _sum if _ops.get(n) and t > _ops[n]]
     if _above:
-        print(f"  ABOVE the stated ops throughput at {len(_above)} depot(s) — this is the peak "
-              f"basis showing through, not a build error: {', '.join(sorted(_above))}")
+        log.info(f"  ABOVE the stated ops throughput at {len(_above)} depot(s) — this is the peak "
+                 f"basis showing through, not a build error: {', '.join(sorted(_above))}")
 write(_fac, "Facilities")
 tm1, tm2 = r1("TransportationModes"), r2("TransportationModes")
 assert set(tm1.modename) == set(tm2.modename)
@@ -119,9 +123,9 @@ for _n in ("UserDefinedVariables", "UserDefinedConstraints"):
         write(r2(_n), _n)
     elif (OUT / f"{_n}.csv").exists():
         (OUT / f"{_n}.csv").unlink()      # same hazard as chain 2: never leave a previous
-        print(f"  - {_n+'.csv':<32} removed (stale — chain-2 mix bounds are now off)")
+        log.info(f"  - {_n+'.csv':<32} removed (stale — chain-2 mix bounds are now off)")
     else:
-        print(f"  - {_n+'.csv':<32} not built (chain-2 mix bounds are off)")
+        log.info(f"  - {_n+'.csv':<32} not built (chain-2 mix bounds are off)")
 (OUT / "_ElapsedTimeReference.csv").unlink(missing_ok=True)   # dropped 2026-09-08, see s2a
 
 # ── WorkCenters: the one real merge ───────────────────────────────────────────────────
@@ -147,9 +151,9 @@ for name, g in wc.groupby("workcentername", sort=True):
     merged.append(row)
 work_centers = pd.DataFrame(merged)
 if notes:
-    print("  merged work centres (both entities size the same docks — capacities summed):")
+    log.info("  merged work centres (both entities size the same docks — capacities summed):")
     for n, parts, tot in notes:
-        print(f"    {n:<34} {' + '.join(f'{p:,}' for p in parts)} = {tot:,}")
+        log.info(f"    {n:<34} {' + '.join(f'{p:,}' for p in parts)} = {tot:,}")
 
 # ── the merge rule is safe for DOCKS and not for SORTERS ──────────────────────────────
 # Summing two workloads is right for a dock: a building can open more doors and staff them. A
@@ -215,16 +219,16 @@ for _fac, _names in sorted(_sorters.items()):
         _lift.append((_fac, _load.get(_fac, 0), _base, _base * _scale, _scale))
 write(work_centers, "WorkCenters")
 
-print("\n  sorters sized on the COMBINED load of both entities (one machine, one rate):")
+log.info("\n  sorters sized on the COMBINED load of both entities (one machine, one rate):")
 for _fac, _l, _b, _c, _sc in sorted(_lift, key=lambda x: -x[4]):
-    print(f"    {_fac:<28} load {_l:>9,} EA   installed {_b:>9,.0f}   lifted to {_c:>9,.0f}"
-          f"   x{_sc:.2f}")
+    log.info(f"    {_fac:<28} load {_l:>9,} EA   installed {_b:>9,.0f}   lifted to {_c:>9,.0f}"
+             f"   x{_sc:.2f}")
 if _lift:
-    print("    ^ each x above 1.00 is a REAL ops shortfall at that building, not spare capacity:")
-    print("      the machine was raised to what the day needs so NEO returns a number "
-          "(HUB_SORTER_POSTURE=lift_to_load).")
+    log.info("    ^ each x above 1.00 is a REAL ops shortfall at that building, not spare capacity:")
+    log.info("      the machine was raised to what the day needs so NEO returns a number "
+             "(HUB_SORTER_POSTURE=lift_to_load).")
 else:
-    print("    every sorter carries its combined load at the installed rate — no lift needed.")
+    log.info("    every sorter carries its combined load at the installed rate — no lift needed.")
 
 # Processes follow the merged capacities — BUT KEEP EACH PROCESS'S RATE RELATIVE TO ITS MACHINE.
 # The rule used to be `rate = merged capacity`, which is right only while every process runs at its
@@ -259,8 +263,8 @@ assert ((((_k - 1).abs() < 1e-9) | (_k < 0.999))).all(), \
 proc = proc.drop(columns="_src")
 _slow = proc[_k < 0.999]
 if len(_slow):
-    print(f"  {len(_slow)} process(es) run slower than their machine and keep that ratio through "
-          f"the merge (Change 48 round-2 clones): x{_k[_k < 0.999].min():.4f}..{_k[_k < 0.999].max():.4f}")
+    log.info(f"  {len(_slow)} process(es) run slower than their machine and keep that ratio through "
+             f"the merge (Change 48 round-2 clones): x{_k[_k < 0.999].min():.4f}..{_k[_k < 0.999].max():.4f}")
 write(proc, "Processes")
 
 # ── the combined balance, and the tension the combination makes visible ───────────────
@@ -283,31 +287,31 @@ VIC = MET + REG
 _LBL1 = {"Interstate": "interstate", "PdoTerm": "PDO terminate",
          "MetroTerm": "Vic Metro to Metro", "LocalTerm": "kept at depot",
          "Regional": "regional pickup"}
-print(f"  chain 1 (assumed):  P {P:,} = "
-      + " + ".join(f"{_LBL1[k]} {v:,}" for k, v in _fam1.items() if v)
-      + ("" if P == sum(_fam1.values()) else f"   MISMATCH ({P - sum(_fam1.values()):+,})"))
-print(f"  chain 2 (measured): D {D:,} = stage {STG:,} + VIC {VIC:,} (metro {MET:,} + regional {REG:,})"
-      f" + interstate {D-STG-VIC:,}")
-print()
-print(f"  The two chains are INDEPENDENT daily activities — collection and delivery — so these")
-print(f"  are two ledgers, not one identity, and nothing here needs to reconcile. What chain 2's")
-print(f"  measurement DOES offer chain 1 is an inference: {VIC:,} EA of today's deliveries were")
-print(f"  lodged in Victoria (same-day), which is delivery-side evidence about the size of the")
-print(f"  collection activity chain 1 models with an assumed P = {P:,}. Use it to revisit")
-print(f"  PICKUP_TOTAL and LOCAL_SHARE when the lodgement-side extract lands; until then chain 1")
-print(f"  stays as assumed, deliberately.")
+log.info(f"  chain 1 (assumed):  P {P:,} = "
+         + " + ".join(f"{_LBL1[k]} {v:,}" for k, v in _fam1.items() if v)
+         + ("" if P == sum(_fam1.values()) else f"   MISMATCH ({P - sum(_fam1.values()):+,})"))
+log.info(f"  chain 2 (measured): D {D:,} = stage {STG:,} + VIC {VIC:,} (metro {MET:,} + regional {REG:,})"
+         f" + interstate {D-STG-VIC:,}")
+log.info("")
+log.info(f"  The two chains are INDEPENDENT daily activities — collection and delivery — so these")
+log.info(f"  are two ledgers, not one identity, and nothing here needs to reconcile. What chain 2's")
+log.info(f"  measurement DOES offer chain 1 is an inference: {VIC:,} EA of today's deliveries were")
+log.info(f"  lodged in Victoria (same-day), which is delivery-side evidence about the size of the")
+log.info(f"  collection activity chain 1 models with an assumed P = {P:,}. Use it to revisit")
+log.info(f"  PICKUP_TOTAL and LOCAL_SHARE when the lodgement-side extract lands; until then chain 1")
+log.info(f"  stays as assumed, deliberately.")
 _zone = 167431          # temp_clustered.csv, the zone table both entities were built from
 if D != _zone:
-    print()
-    print(f"  ONE THING THAT IS NOT INDEPENDENT — the two entities count different days.")
-    print(f"  Chain 2 carries {D:,} EA (the measured peak day); chain 1's volumes come from the")
-    print(f"  zone table's {_zone:,} EA, which spans every delivery date the extract touches.")
-    print(f"  Any figure that adds a chain-1 number to a chain-2 number is mixing bases until")
-    print(f"  the chain-1 source build is rebased too, or chain 1 is scaled by {D/_zone:.4f}.")
+    log.info("")
+    log.info(f"  ONE THING THAT IS NOT INDEPENDENT — the two entities count different days.")
+    log.info(f"  Chain 2 carries {D:,} EA (the measured peak day); chain 1's volumes come from the")
+    log.info(f"  zone table's {_zone:,} EA, which spans every delivery date the extract touches.")
+    log.info(f"  Any figure that adds a chain-1 number to a chain-2 number is mixing bases until")
+    log.info(f"  the chain-1 source build is rebased too, or chain 1 is scaled by {D/_zone:.4f}.")
 else:
-    print()
-    print(f"  Both entities are on the same base ({_zone:,} EA, the zone table), so combined")
-    print(f"  totals add up. Chain 2's SPLIT is measured; its SIZE is the zone table's.")
+    log.info("")
+    log.info(f"  Both entities are on the same base ({_zone:,} EA, the zone table), so combined")
+    log.info(f"  totals add up. Chain 2's SPLIT is measured; its SIZE is the zone table's.")
 
 
 _want = {"Facilities", "TransportationModes", "Products", "Suppliers", "Customers",
@@ -317,4 +321,8 @@ _want = {"Facilities", "TransportationModes", "Products", "Suppliers", "Customer
          "Processes"}
 _have = {p.stem for p in OUT.glob("*.csv")} - {"UserDefinedVariables", "UserDefinedConstraints"}
 assert _want <= _have, f"missing tables: {_want - _have}"
-print(f"\n  {len(_have)} tables in {OUT.name} — upload this folder to Optilogic")
+log.info(f"\n  {len(_have)} tables in {OUT.name} — upload this folder to Optilogic")
+
+# The phase report card — what this step actually wrote, read back off the folder itself.
+# One line here, the block in _report.py, so this file stays a builder.
+_report.s2c(log=log)
