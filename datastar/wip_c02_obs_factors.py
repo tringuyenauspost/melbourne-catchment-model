@@ -43,6 +43,7 @@ TABLE_NAME = {
     "obs_round2_sites": "Wip_C02_ObsRound2Sites",
     # NOT an obs_ file, and published because macro 3 needs it: s2a re-derives a ratio from
     # _provenance.csv, so leaving it behind would change a number in chain 2 rather than fail.
+    "obs_path": "Wip_C02_ObsPath",
     "_provenance": "Wip_C02_Provenance",
 }
 

@@ -82,6 +82,7 @@ TABLES_BY_MACRO = {
         "Wip_C02_ObsSingleSort",
         "Wip_C02_ObsSecondSort",
         "Wip_C02_ObsRound2Sites",
+        "Wip_C02_ObsPath",
         "Wip_C02_Provenance",
     ],
   },
