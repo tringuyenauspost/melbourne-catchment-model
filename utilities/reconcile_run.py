@@ -566,7 +566,7 @@ def t_facilities(M):
     The cap is sized in s2a as delivery + arrivals + stage + round-2 inbound, plus headroom, so the
     comparison here is everything that arrived on a lane. It is a bound, not an identity: a
     building under its cap is fine, a building over it means NEO counted something the sizing
-    formula does not — the dial to move then is FACILITY_HEADROOM, not the formula.
+    formula does not — the dial to move then is FACILITY_BUFFER, not the formula.
     """
     t = Table(7, "FACILITIES — cap vs freight in",
               ["facility", "cap EA", "in EA", "out EA", "util", "state"],

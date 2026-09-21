@@ -141,7 +141,7 @@ PICKUP_BALANCE = "conserve_supply"            # <-- hold P + IN where origin_mix
 
 # ── INTERSTATE INBOUND UNLOAD ──────────────────────────────────────────────
 # One product, two competing recipes (ULD / long reach). Doc FAQ 2.
-INTERSTATE_UNLOAD   = dial("INTERSTATE_UNLOAD")     # fixed | bounded | free (Change 23)
+INTERSTATE_UNLOAD_MIX   = dial("INTERSTATE_UNLOAD_MIX")     # fixed | bounded | free (Change 23)
 INTERSTATE_ULD_SHARE = dial("INTERSTATE_ULD_SHARE") # used by "fixed" — a PLACEHOLDER
 
 # ── Change 33 (2026-08-13): the work-centre mix as a user-defined constraint ─────────
@@ -149,7 +149,7 @@ INTERSTATE_ULD_SHARE = dial("INTERSTATE_ULD_SHARE") # used by "fixed" — a PLAC
 # UserDefinedVariable is scoped by product AND process at once, which is the missing
 # capability, so it is expressible now. unload_mix.csv carries the shares; see the cell
 # after Groups for the algebra and the n-1 rule.
-VIC_UNLOAD  = dial("VIC_UNLOAD")       # free | bounded — mirrors INTERSTATE_UNLOAD
+VIC_UNLOAD_MIX  = dial("VIC_UNLOAD_MIX")       # free | bounded — mirrors INTERSTATE_UNLOAD_MIX
 WC_MIX_BAND = dial("WC_MIX_BAND")      # half-width of a bound, in share points
 
 # Change 39 : the MANUAL-SORT FLOOR, measured off the scan…  → docs/chain2-observed.md#change-39-the-manual-sort-floor
@@ -196,7 +196,7 @@ HUB_SORT_ROUNDS = dial("HUB_SORT_ROUNDS")    # <-- sort rounds
 # so loudly — a scale above 1.0 is a real ops requirement (more docks, or longer dock hours), not a
 # modelling fudge. Set False to leave the fleet as stated and let the shortfall stand.
 HUB_DOCK_AUTOSCALE = True
-HUB_DOCK_HEADROOM  = dial("HUB_DOCK_HEADROOM")
+HUB_DOCK_BUFFER  = dial("HUB_DOCK_BUFFER")
 
 # MINIMUM VIABLE SHIPMENT  → docs/chain2-observed.md#minimum-viable-shipment
 DESPATCH_MIN_SHIPMENT = dial("DESPATCH_MIN_SHIPMENT")   # EA per arc. 0 = OFF.
@@ -505,7 +505,7 @@ STAGE_PUD_SET = SORT_PUD_SET & DELIVERY_PUD_SET
 PUD_CAPACITY = {_r.pud: int(_r.capacity_ea)
                 for _r in pd.read_csv(FASS / "pud_capacity.csv").itertuples()}
 # LOCAL_KEEP / LOCAL_SHARE: chain-1 dials, moved to the chain-1 notebook.
-FACILITY_HEADROOM = dial("FACILITY_HEADROOM")
+FACILITY_BUFFER = dial("FACILITY_BUFFER")
 
 ORIGIN_TAGS = sorted({origin_tag(p) for p in CLUSTER_OF_PUD})
 # Tags a DELIVERY demand row can carry. Interstate is its own family, not an origin cluster, but it
@@ -537,7 +537,7 @@ log.info(f"periods: {PERIODS}   hub sort rounds: {HUB_SORT_ROUNDS}"
 # Change 51: this used to be fifteen lines of dict surgery that built DLC as a hub and then
 # moved it, popped its code, chased its sorter across and re-pointed a coordinate. sites.csv
 # gives it `role = sort_only` and there is nothing to undo.
-DLC_SMALL_SHARE = dial("DLC_SMALL_SHARE")   # Max round-2 divert share; measured 0.4%, see dials.csv
+DLC_MAX_ROUND2_SHARE = dial("DLC_MAX_ROUND2_SHARE")   # Max round-2 divert share; measured 0.4%, see dials.csv
 
 # CHANGE 30 — THE SORT-ONLY SITES: eight sorting buildings, not…  → docs/chain2-observed.md#change-30-the-sort-only-sites
 # Change 51: sort_only_sites.csv is gone — `role = sort_only` in sites.csv says it, and the
@@ -571,6 +571,59 @@ XD_DESTS   = {d for _, _, d in XD_PAIRS}          # sites that sort someone else
 R2_PAIRS = {(f, c, CODE_SITE[g], CODE_SITE[h]) for (f, c, g, h) in OBS_ROUND2
             if h != "ONCE" and g in CODE_SITE and h in CODE_SITE}
 R2_SORT_SITES = {h for _, _, _, h in R2_PAIRS}    # tightened: a site with no inbound lane is out
+
+# ══ ROUNDS BEYOND THE SECOND (2026-09-21) ═════════════════════════════════════════════
+# A parcel that is sorted a third time was sorted somewhere twice already, and WHERE matters:
+# 26.9% of the third-round volume routes more than ten points differently once you know the
+# first site as well as the second, because the commonest third round RETURNS to the first
+# building (TPF > MGF > TPF, 1,062 EA). So the flavour carries the PATH from round 2 on:
+# `INTERSTATE_MPF` becomes `INTERSTATE_MPF_TPF`, and it collapses back to the entry flavour at
+# Delivered — demand and OriginMix are about where a parcel CAME FROM, and that is the entry.
+#
+# RETURNS ARE ALLOWED (decided 2026-09-21): a site may sort a flavour it has already sorted.
+# That is the measurement, and it is why s3b_no_relay must exempt these lanes.
+#
+# Everything here is empty at ROUNDS = 2, which is why a two-round build is untouched by it.
+ROUNDS = HUB_SORT_ROUNDS
+PATH_NEXT, PREFIXES, RN_PAIRS = {}, {r: set() for r in range(1, 5)}, set()
+if ROUNDS >= 3:
+    _pathf = FOBS / "obs_path.csv"
+    assert _pathf.exists(), (
+        f"{ROUNDS} sort rounds needs the measured paths and {_pathf.name} is not there — "
+        f"set PATH_DEPTH to {ROUNDS} in dials.csv and re-run the exporter")
+    _prows = [(C2_FAMILY[r.family], r.cls, tuple(r.path.split(" > ")), int(r.articles))
+              for r in pd.read_csv(_pathf).itertuples() if C2_FAMILY[r.family] != "STG"]
+    _deep = max(len(sites) for _f, _c, sites, _a in _prows)
+    assert _deep >= ROUNDS, (
+        f"the measurement reaches {_deep} buildings and {ROUNDS} rounds needs {ROUNDS} — "
+        f"PATH_DEPTH is {_deep} in the export that wrote {_pathf.name}")
+    # count every (prefix -> next) step, then fold the thin ones into END so a third round is
+    # not built out of lanes the two-round model would have folded away
+    _step = {}
+    for _f, _c, _sites, _a in _prows:
+        for _i in range(len(_sites)):
+            _pre = _sites[:_i + 1]
+            _nx = _sites[_i + 1] if _i + 1 < len(_sites) else "END"
+            _step.setdefault((_f, _c, _pre), {})
+            _step[(_f, _c, _pre)][_nx] = _step[(_f, _c, _pre)].get(_nx, 0) + _a
+    _fold = dial("FOLD_MIN_ARTICLES")
+    _folded_ea = 0
+    for _k, _counts in _step.items():
+        _keep = {n: a for n, a in _counts.items() if n == "END" or a >= _fold}
+        _folded_ea += sum(a for n, a in _counts.items() if n != "END" and a < _fold)
+        _keep["END"] = _keep.get("END", 0) + sum(a for n, a in _counts.items()
+                                                 if n != "END" and a < _fold)
+        _tot = sum(_keep.values())
+        PATH_NEXT[_k] = {n: a / _tot for n, a in _keep.items() if a}
+        PREFIXES[len(_k[2])].add(_k)
+        for _n in _keep:
+            if _n != "END" and _keep[_n]:
+                RN_PAIRS.add((_k[0], _k[1], _k[2], _n))
+    log.info(f"  {ROUNDS} SORT ROUNDS — measured paths: "
+             + ", ".join(f"{len(PREFIXES[r])} prefixes of {r}" for r in range(1, _deep + 1)
+                         if PREFIXES[r])
+             + f"; {len(RN_PAIRS)} (prefix -> next site) lanes survive the {_fold:,} EA fold, "
+             f"{_folded_ea:,} EA folded onto ending there")
 log.info(f"  Change 29 stage lanes: cross-dock "
          + (", ".join(sorted({f"{HUB_CODE[r]}->{HUB_CODE[e]}" for _c, r, e in XD_PAIRS})) or "none")
          + f"; round-2 routing on {len(R2_PAIRS)} family x class x site pairs into "
@@ -604,7 +657,7 @@ log.info(f"  sorting sites ({len(ARRIVAL_SET)}): {sorted(HUB_CODE.values())}"
          f"   sort-only: {sorted(HUB_CODE[s] for s in SORT_ONLY_PUDS)}   PDC buildings: {len(PUD_SET)}")
 log.info(f"    round-0 (own pickup): {sorted(_short_ for _short_ in (p.replace('PUD_','') for p in ROUND0_PUD_SET))}")
 log.info(f"    round-2 (off-hub 2nd sort): {[p.replace('PUD_','') for p in sorted(ROUND2_PUD_SET)]}"
-         f"  (cap {DLC_SMALL_SHARE:.0%})")
+         f"  (cap {DLC_MAX_ROUND2_SHARE:.0%})")
 log.info(f"    staging: {[p.replace('PUD_','') for p in sorted(STAGE_PUD_SET)]}"
          f"   delivering: {len(DELIVERY_PUD_SET)}")
 log.info(f"  tag families — pickup {PICKUP_TAGS}")
@@ -727,13 +780,13 @@ log.info("  delivered flavours: "
 # Change 23 — THE INTERSTATE UNLOAD MIX, MADE TO ACTUALLY BIND  → docs/chain2-observed.md#change-23-the-interstate-unload-mix
 PRES_EQ   = {"ULD": "ULD", "LR": "LONGREACH"}          # presentation -> unload machine
 INT_PRES  = {"ULD": INTERSTATE_ULD_SHARE, "LR": round(1 - INTERSTATE_ULD_SHARE, 6)}
-FIXED_PRES = (INTERSTATE_UNLOAD == "fixed")
-assert INTERSTATE_UNLOAD in ("fixed", "free", "bounded")
-assert VIC_UNLOAD in ("free", "bounded"), \
-    f"VIC_UNLOAD is free | bounded (there is no split VIC arrival product), got {VIC_UNLOAD!r}"
+FIXED_PRES = (INTERSTATE_UNLOAD_MIX == "fixed")
+assert INTERSTATE_UNLOAD_MIX in ("fixed", "free", "bounded")
+assert VIC_UNLOAD_MIX in ("free", "bounded"), \
+    f"VIC_UNLOAD_MIX is free | bounded (there is no split VIC arrival product), got {VIC_UNLOAD_MIX!r}"
 # Change 33: `bounded` is now real  → docs/chain2-observed.md#change-33-bounded-is-now-real
-BOUNDED_PRES = (INTERSTATE_UNLOAD == "bounded")
-VIC_BOUNDED  = (VIC_UNLOAD == "bounded")
+BOUNDED_PRES = (INTERSTATE_UNLOAD_MIX == "bounded")
+VIC_BOUNDED  = (VIC_UNLOAD_MIX == "bounded")
 if BOUNDED_PRES:
     _t = UNLOAD_MIX.loc[(UNLOAD_MIX.family == "INTERSTATE")
                         & (UNLOAD_MIX.method == "UNLOAD_ULD"), "target_share"]
@@ -748,7 +801,7 @@ def int_pk(cls, pres=None):
     """The interstate arrival product — presentation-flavoured only when the ratio is pinned."""
     return f"{cls}_INTERSTATE_{pres}_Pickup" if (FIXED_PRES and pres) else f"{cls}_INTERSTATE_Pickup"
 
-log.info(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD.upper()}"
+log.info(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD_MIX.upper()}"
          + (f"  ({', '.join(f'{k} {v:.0%}' for k, v in INT_PRES.items())}, pinned by supplier "
          f"capacity — exact, no constraint)" if FIXED_PRES
          else "  (two competing recipes, solver picks on cost)"))
@@ -775,7 +828,7 @@ _CAL += [
      "19% of interstate is hub-handled, depot-sorted"),
     ("bypass share band  (C2)", "free", f"measured +/- {BYPASS_BAND:.0%}",
      "single-sort share per hub x class, FlowConstraints Min+Max"),
-    ("DLC_SMALL_SHARE  (C3)", "0.15", f"{DLC_SMALL_SHARE}",
+    ("DLC_MAX_ROUND2_SHARE  (C3)", "0.15", f"{DLC_MAX_ROUND2_SHARE}",
      "off-hub round-2 measured at 0.37% of delivered volume"),
 ]
 log.info("Change 26 + 27 — chain-2 calibrated, then constrained, from the 20 May 2026 scan extract")
@@ -900,14 +953,39 @@ log.info("  The two transport facilities sit on borrowed coordinates, so those p
 PRODUCT_COLS = ["productname", "status", "unitvolume", "unitweight", "notes"]
 CLASSES = ["EP", "PP"]
 # A SWITCH, NOT A COUNT. Everything below asks `TWO_ROUNDS`, so any value that is not 2 builds
-# the ONE-round five-state chain — a 3 would quietly produce a smaller model than a 2, and the
-# first thing to complain would be an assert about a broken BOM chain that names neither dial.
-# Three rounds is not a setting: it is a third set of states (Unloaded3/Sorted3/Despatch3), the
-# lanes between them, and a measurement that can see a third building — PATH_DEPTH is 2.
-assert HUB_SORT_ROUNDS in (1, 2), (
-    f"HUB_SORT_ROUNDS is a 1-or-2 switch and is {HUB_SORT_ROUNDS}. 1 = five-state chain, "
-    f"2 = a second sort exists. A third round is a model change, not a dial.")
-TWO_ROUNDS = HUB_SORT_ROUNDS == 2
+# the ONE-round five-state chain — a 3 would quietly produce a SMALLER model than a 2, and the
+# first thing to complain would be an assert about a broken BOM chain naming neither dial.
+#
+# WHAT A THIRD ROUND WOULD TAKE, and why it is not a dial. Measured off the reduction
+# (2026-09-21): 10,764 EA, 6.48% of the cohort, touch three or more of our buildings before
+# their depot — 8,533 at three, 1,544 at four, 687 at five or more. So a third round is REAL,
+# and it is not modelled: PATH_DEPTH=2 with first_last keeps the first and last building and
+# folds 14,352 interior touches away. Three things are missing, and none of them is code:
+#
+#   1. A MEASURED THIRD HOP. Round-2 routing is OBS_LEGS, a measured (family, class, entry,
+#      dest2) matrix. There is no (…, dest3): the exporter cannot write one while the path is
+#      capped at two buildings, so a third round's routing would have to be invented.
+#   2. A FLAVOUR THAT REMEMBERS ROUND 2. `INTERSTATE_<h>` carries where the parcel ENTERED,
+#      and nothing else. Round 2 is granted anywhere except the flavour's own site; round 3
+#      cannot be withheld from the round-2 site because no product knows what it was. Carrying
+#      it means the flavour becomes a PAIR of sites — every family's product count goes from
+#      `sites` to `sites x (sites-1)`, roughly 17 flavours to 80, and the lanes with them.
+#   3. A RULE FOR WHERE ROUND 3 MAY HAPPEN. Among the 3+ building parcels the commonest paths
+#      RETURN to the first building — TPF->TPF 2,178 EA, MPF->MPF 974, SWP->SWP 396. A third
+#      round modelled without a rule mostly books A->B->A, which is exactly what
+#      s3b_no_relay.py exists to forbid.
+#
+# ALL THREE ARE NOW BUILT (2026-09-21): obs_path.csv measures the third hop, the flavour carries
+# the path from round 2 on, and the rule is that returns are allowed. So 3 and 4 are settings —
+# but each one needs a measurement deep enough to justify it, which is asserted where the paths
+# are read, not here.
+assert HUB_SORT_ROUNDS in (1, 2, 3, 4), (
+    f"HUB_SORT_ROUNDS is {HUB_SORT_ROUNDS}; 1 = five-state chain, 2 = a second sort exists, "
+    f"3 and 4 add rounds measured from obs_path.csv. Above 4 nothing has been measured or "
+    f"tested — the paths themselves only reach five buildings on 687 EA.")
+# "there is a round after the first", not "there are exactly two": every round beyond the
+# second is built on top of the second, so this stays true at 3 and 4.
+TWO_ROUNDS = HUB_SORT_ROUNDS >= 2
 
 # Change 25: the bypass is a second RECIPE for a product that already exists
 # (`<cls>_INTERSTATE_<hub>_Despatch2`), so it adds no products at all — only a BOM, a
@@ -924,6 +1002,26 @@ def st(cls, tag, state):    return f"{cls}_{tag}_{state}"
 def delivered(cls, tag):    return st(cls, tag, "Delivered")
 def dsp1(cls, tag, code):   return f"{cls}_{tag}_Despatch1_{code}"
 def dsp_final(cls, tag):    return st(cls, tag, "Despatch2" if TWO_ROUNDS else "Despatch")
+
+def path_tag(fam_or_tag, path):
+    """The flavour a parcel carries once it has been sorted along `path`.
+
+    ("INT", ("MPF",))        -> INTERSTATE_MPF          — the two-round flavour, unchanged
+    ("INT", ("MPF", "TPF"))  -> INTERSTATE_MPF_TPF      — and where its second sort happened
+    """
+    base = FAM_TAG[fam_or_tag] if fam_or_tag in FAM_TAG else fam_or_tag
+    return "_".join([base] + [HUB_CODE.get(s, s) for s in path])
+
+def dsp_round(cls, tag, r, site=None):
+    """The despatch product after round `r`.
+
+    While another round may follow it carries the site that just sorted it, exactly as
+    `Despatch1_<site>` does — that is what lets the next round start from a known building.
+    The last round's despatch is the delivery-ready state and carries no site.
+    """
+    if r >= ROUNDS:
+        return st(cls, tag, f"Despatch{r}" if r > 1 else "Despatch")
+    return f"{cls}_{tag}_Despatch{r}_{HUB_CODE.get(site, site)}"
 def dsp_out(cls, tag, hub): return dsp1(cls, tag, HUB_CODE[hub]) if TWO_ROUNDS else st(cls, tag, "Despatch")
 
 ROUND2_STATES = ["Unloaded2", "Sorted2", "Despatch2"] if TWO_ROUNDS else ["Despatch"]
@@ -985,6 +1083,35 @@ for cls in CLASSES:
         prod_rows.append([dsp_final(cls, t), "Include", "", "",
                           f"local stage at the {t[4:]} PDC — supplied delivery-ready"])
         prod_rows.append([delivered(cls, t), "Include", "", "", f"delivered from the {t[4:]} local stage"])
+
+# ── ROUNDS BEYOND THE SECOND ──────────────────────────────────────────────────────────
+# A parcel that will be sorted again leaves the site in a CONTINUE state that names where it
+# has just been; one that is finished leaves in the delivery-ready state the two-round model
+# already has. So the delivery side — demand, OriginMix, the driver wave, the zone lanes —
+# does not change at all: a third round rejoins `Despatch2` at the end, and the path flavour
+# it carried while it was in the sort network dissolves there.
+def _continues(fam, cls, prefix):
+    """The sites a parcel with this path may be sent to for one more round. Measured."""
+    return sorted({k[3] for k in RN_PAIRS if k[:3] == (fam, cls, prefix)})
+
+
+CONTINUE_PREFIXES = [(f, c, pre) for r in range(2, ROUNDS) for (f, c, pre) in sorted(PREFIXES[r],
+                     key=str) if _continues(f, c, pre)] if ROUNDS >= 3 else []
+
+if ROUNDS >= 3:
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r = len(prefix)                               # rounds already done
+        held, last = path_tag(fam, prefix[:-1]), prefix[-1]
+        # leaves the site that just sorted it, named for it, so the next round knows the path
+        prod_rows.append([f"{cls}_{held}_DespatchR{r}_{last}", "Include", "", "",
+                          f"sorted {r}x along {' > '.join(prefix)}, out again for round {r + 1} "
+                          f"at {'/'.join(_continues(fam, cls, prefix))}"])
+        # and arrives carrying the whole path, because where it goes next depends on all of it
+        for _s in (f"Unloaded{r + 1}", f"Sorted{r + 1}"):
+            prod_rows.append([f"{cls}_{path_tag(fam, prefix)}_{_s}", "Include", "", "",
+                              f"round {r + 1}, sorted before at {' > '.join(prefix)}"])
+    log.info(f"  round 3+ : {len(CONTINUE_PREFIXES)} paths carry on, "
+             f"{len([k for k in RN_PAIRS if len(k[2]) >= 2])} lanes out of them")
 
 products = pd.DataFrame(prod_rows, columns=PRODUCT_COLS).drop_duplicates("productname")
 write_csv(products, "Products")
@@ -1196,7 +1323,7 @@ _arr_pud = {p: sum(sum(VOL[f].get((p, c), 0) for f in ARR_FAMS)
 # Bayswater keeps a 937 EA residual that neither term explains and that this notebook's own
 # quantities cannot source — NEO counts something here we are not reproducing exactly. The
 # headroom absorbs it (the cap lands 966 EA above the activity), so if a later run bites at
-# Bayswater again the dial to move is FACILITY_HEADROOM, not this formula.
+# Bayswater again the dial to move is FACILITY_BUFFER, not this formula.
 _stg_pud = {p: sum(STAGE_BY_PUD.get((p, c), 0) for c in CLASSES)
             for p in sorted(DELIVERY_PUD_SET)}
 def _round2_inbound(depot):
@@ -1214,12 +1341,12 @@ def _round2_inbound(depot):
 _r2_pud = {p: _round2_inbound(p) for p in sorted(DELIVERY_PUD_SET)}
 _lifted, _reason = {}, {}
 log.info(f"  facility load check (delivery + arrivals + stage + round-2 inbound vs PUD_CAPACITY, "
-         f"+{FACILITY_HEADROOM:.0%} headroom):")
+         f"+{FACILITY_BUFFER:.0%} buffer):")
 for d in sorted(DELIVERY_PUD_SET):
     load = (float(_dem_pud.get(d, 0)) + float(_arr_pud.get(d, 0))
             + float(_stg_pud.get(d, 0)) + float(_r2_pud.get(d, 0)))
     cap  = PUD_CAPACITY.get(d, 0)
-    want = math.ceil(load * (1 + FACILITY_HEADROOM))
+    want = math.ceil(load * (1 + FACILITY_BUFFER))
     if want > cap:
         _lifted[d], _reason[d] = want, ("over ops cap" if load > cap else "headroom only")
         _extra = ("" if not _r2_pud.get(d) else
@@ -1558,6 +1685,30 @@ for c in CLASSES:
         bom_rows.append([f"BOM_DRIVER_{c}_{t}", dsp_final(c, t), 1, "Include",
                          f"driver wave -> delivered, kept at the {t[4:]} PDC"])
 
+# ── Rounds beyond the second: load out, unload, sort, and rejoin the delivery state ───
+# Four recipes per path that carries on. The last of them produces the SAME delivery-ready
+# product a two-round parcel ends in, which is what keeps the delivery side untouched.
+if ROUNDS >= 3:
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r = len(prefix)
+        held, last = path_tag(fam, prefix[:-1]), prefix[-1]
+        carry, mine = f"{cls}_{held}_DespatchR{r}_{last}", path_tag(fam, prefix)
+        entry_tag = path_tag(fam, prefix[:1])
+        # 1. the load at the site that just sorted it — same input as the delivery-ready load,
+        #    a different output, and the choice between them is the measured continue share
+        bom_rows.append([f"BOM_LOADON{r}_{cls}_{mine}", st(cls, held, f"Sorted{r}"), 1, "Include",
+                         f"load at {last} for another round, path {' > '.join(prefix)}"])
+        # 2-3. unload and sort at the next site, now carrying the whole path
+        bom_rows.append([f"BOM_UNLOAD{r + 1}_{cls}_{mine}", carry, 1, "Include",
+                         f"round-{r + 1} unload of freight sorted at {' > '.join(prefix)}"])
+        bom_rows.append([f"BOM_SORT{r + 1}_{cls}_{mine}", f"{cls}_{mine}_Unloaded{r + 1}", 1,
+                         "Include", f"round-{r + 1} sort, keeps its {' > '.join(prefix)} path"])
+        # 4. the load that finishes it — back into the delivery-ready state of its ENTRY
+        #    flavour, where demand and OriginMix already know what to do with it
+        bom_rows.append([f"BOM_LOADEND{r + 1}_{cls}_{mine}", f"{cls}_{mine}_Sorted{r + 1}", 1,
+                         "Include", f"round-{r + 1} load -> delivery-ready, "
+                                    f"{entry_tag} flavour, path dissolves here"])
+
 # ── Round 2 (interstate only), at a site that is NOT the one that did the first sort ───
 # Change 21b: round 2 no longer collapses the arrival flavour. `Despatch1_<h>` becomes
 # `INTERSTATE_<h>_Unloaded2` and stays that way through Despatch2 and Delivered, which is what
@@ -1687,16 +1838,16 @@ def _machines(site):
     return list(dict.fromkeys(ms))
 
 # ── Round-2 sort PDC: how much may divert off the hubs (Change 20a) ────────────────────
-# Round-2 volume is everything still needing a second sort = D - stage. DLC_SMALL_SHARE caps the
+# Round-2 volume is everything still needing a second sort = D - stage. DLC_MAX_ROUND2_SHARE caps the
 # slice that may take that sort at a PDC instead of a hub — the stand-in for "the small-parcel
 # share" until products carry a size attribute. A Max, not a pin.
 _R2_VOL    = D_TOTAL - STAGE_TOT
-r2_pud_vol = {p: int(round(DLC_SMALL_SHARE * _R2_VOL)) for p in sorted(ROUND2_PUD_SET)}
+r2_pud_vol = {p: int(round(DLC_MAX_ROUND2_SHARE * _R2_VOL)) for p in sorted(ROUND2_PUD_SET)}
 # its docks are sized to that slice (plus the same headroom the hubs get), expressed as a rate/hr
 # because capacity here is rate x operating window, not a flat daily figure.
-PUD_R2_DOCK_HR = {p: v * (1 + HUB_DOCK_HEADROOM) / AVAILABLE_HOURS_PER_DAY["UNLOAD"]
+PUD_R2_DOCK_HR = {p: v * (1 + HUB_DOCK_BUFFER) / AVAILABLE_HOURS_PER_DAY["UNLOAD"]
                   for p, v in r2_pud_vol.items()}
-log.info(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_SMALL_SHARE:.0%} -> "
+log.info(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_MAX_ROUND2_SHARE:.0%} -> "
          + ", ".join(f"{_short(k)} {v:,}" for k, v in r2_pud_vol.items()) + " (rest stays at the hubs)")
 
 # ── Hub dock sizing (Change 14) ────────────────────────────────────────────────────────
@@ -1721,7 +1872,7 @@ _r2_pool  = {h: (sum(IN_by_hub_class[(g, c)] for c in CLASSES for g in cls_hubs(
 _r2_even  = _r2_touch / max(len(R2_SORT_SITES), 1)
 _dock_base = sum(RATE_HR[a] for a in UNLOADS) * AVAILABLE_HOURS_PER_DAY["UNLOAD"]
 _dock_day  = len(HUB_SET) * _dock_base
-_need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_HEADROOM)
+_need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_BUFFER)
          for h in sorted(ARRIVAL_SET)}
 HUB_DOCK_SCALE = ({h: max(1.0, _need[h] / _dock_base) for h in sorted(ARRIVAL_SET)}
                   if HUB_DOCK_AUTOSCALE else {h: 1.0 for h in sorted(ARRIVAL_SET)})
@@ -1767,15 +1918,15 @@ for site in sorted(set(list(SORT_SITES) + list(DELIVERY_PUD_SET) + list(ROUND2_P
                         "", ""])
 # driver waves at the delivery PDCs
 lm_by_pud = base.groupby("pud")["parcel_count"].sum()   # base carries `pud` since Change 12
-WAVE_RATE, WAVE_VAN = dial("WAVE_RATE"), dial("WAVE_VAN")
+DELIVERED_PER_HOUR, VAN_CAPACITY = dial("DELIVERED_PER_HOUR"), dial("VAN_CAPACITY")
 for site in sorted(DELIVERY_PUD_SET):
     win = window("DRIVER_WAVE")
     peak = max(PERIOD_SPLIT["delivery"][p] for p in PERIODS)      # size for the busiest period
     vol = lm_by_pud.get(site, 0) * peak
-    drivers = math.ceil(vol / min(WAVE_VAN, WAVE_RATE * win)) if vol else 0
+    drivers = math.ceil(vol / min(VAN_CAPACITY, DELIVERED_PER_HOUR * win)) if vol else 0
     wc_rows.append([f"WC_DRIVER_WAVE_{_short(site)}", site, "Include", "Open", "Existing",
-                    int(drivers * WAVE_RATE * win), "EA", round(FIXED_YR["DRIVER_WAVE"] / WORKING_DAYS),
-                    "", "", "", f"{drivers} drivers x {WAVE_RATE}/hr x {win}h per period "
+                    int(drivers * DELIVERED_PER_HOUR * win), "EA", round(FIXED_YR["DRIVER_WAVE"] / WORKING_DAYS),
+                    "", "", "", f"{drivers} drivers x {DELIVERED_PER_HOUR}/hr x {win}h per period "
                     f"(sized on the busiest period, {peak:.0%} of the day)", "", ""])
     site_machines.setdefault(site, [])
     site_machines[site] = site_machines[site] + ["DRIVER_WAVE"]
@@ -1997,6 +2148,43 @@ if TWO_ROUNDS:
                             pp_rows.append(_pp(site, st(c, vt, "Despatch2"), f"BOM_LOAD2_{c}_{vt}",
                                                pn, f"round-2 load, {_fl} via {HUB_CODE[g]}"))
 
+# ── Rounds beyond the second: where each of the four recipes runs ─────────────────────
+# The load-on runs at the site that just sorted the freight; the unload, the sort and the
+# closing load run at the site taking the next round. `procs_r2` is the round-2-scaled copy of
+# each process, so a third round is timed and charged the same way a second one is.
+if ROUNDS >= 3:
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r = len(prefix)
+        mine, last_site = path_tag(fam, prefix), CODE_SITE.get(prefix[-1])
+        carry = f"{cls}_{path_tag(fam, prefix[:-1])}_DespatchR{r}_{prefix[-1]}"
+        if last_site is None:
+            continue
+        for a, pnames in procs_r2.get(last_site, {}).items():
+            if not (a.startswith("LOAD_") or a == PUD_R2_LOAD):
+                continue
+            for pn in pnames:
+                pp_rows.append(_pp(last_site, carry, f"BOM_LOADON{r}_{cls}_{mine}", pn,
+                                   f"load at {prefix[-1]} for round {r + 1}"))
+        for nxt in _continues(fam, cls, prefix):
+            nsite = CODE_SITE.get(nxt)
+            if nsite is None:
+                continue
+            for a, pnames in procs_r2.get(nsite, {}).items():
+                for pn in pnames:
+                    if a.startswith("UNLOAD_") or a == PUD_R2_UNLOAD:
+                        pp_rows.append(_pp(nsite, f"{cls}_{mine}_Unloaded{r + 1}",
+                                           f"BOM_UNLOAD{r + 1}_{cls}_{mine}", pn,
+                                           f"round-{r + 1} unload at {nxt}, "
+                                           f"path {' > '.join(prefix)}"))
+                    elif a.startswith("SORT_"):
+                        pp_rows.append(_pp(nsite, f"{cls}_{mine}_Sorted{r + 1}",
+                                           f"BOM_SORT{r + 1}_{cls}_{mine}", pn,
+                                           f"round-{r + 1} sort at {nxt}"))
+                    elif a.startswith("LOAD_") or a == PUD_R2_LOAD:
+                        pp_rows.append(_pp(nsite, st(cls, path_tag(fam, prefix[:1]), "Despatch2"),
+                                           f"BOM_LOADEND{r + 1}_{cls}_{mine}", pn,
+                                           f"round-{r + 1} load at {nxt} -> delivery-ready"))
+
 # ── driver waves: one per origin a zone under this PDC may be served from ─────────────
 for site in sorted(DELIVERY_PUD_SET):
     for pn in procs_at.get(site, {}).get("DRIVER_WAVE", []):
@@ -2182,6 +2370,20 @@ if TWO_ROUNDS:
                         lane(g, h, dsp1(c, fam, HUB_CODE[g]),
                              f"{_leg} linehaul: site->site (Despatch1, 2nd sort)",
                              mode=m, rule="Treat As Full")
+# 6d) rounds beyond the second: the continue state, site -> site, carrying its path
+if ROUNDS >= 3:
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r = len(prefix)
+        o = CODE_SITE.get(prefix[-1])
+        carry = f"{cls}_{path_tag(fam, prefix[:-1])}_DespatchR{r}_{prefix[-1]}"
+        for nxt in _continues(fam, cls, prefix):
+            d2 = CODE_SITE.get(nxt)
+            if o is None or d2 is None:
+                continue
+            for m in LINEHAUL_MODES:
+                lane(o, d2, carry, f"6d linehaul: site->site (round {r + 1}, "
+                                   f"path {' > '.join(prefix)})", mode=m, rule="Treat As Full")
+
 # 6x) the CROSS-DOCK lane: hub -> arrival depot, UNSORTED (Change 28, 12b)
 if XDOCK_ENABLED:
     for (g, d, c) in sorted(XDOCK_PAIR):          # Change 29: the measured handing-on lanes
@@ -2300,6 +2502,18 @@ if TWO_ROUNDS:
                     rp_rows.append([h, dsp1(c, FAM_TAG.get(fam, fam), HUB_CODE[g]), g,
                                     "", "", "Include",
                                     "", "", "", "", "site->site (Despatch1, 2nd sort)"])
+if ROUNDS >= 3:
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r = len(prefix)
+        o = CODE_SITE.get(prefix[-1])
+        carry = f"{cls}_{path_tag(fam, prefix[:-1])}_DespatchR{r}_{prefix[-1]}"
+        for nxt in _continues(fam, cls, prefix):
+            d2 = CODE_SITE.get(nxt)
+            if o is None or d2 is None:
+                continue
+            rp_rows.append([d2, carry, o, "", "", "Include", "", "", "", "",
+                            f"site->site (round {r + 1}, path {' > '.join(prefix)})"])
+
 # cross-dock: the arrival depots take unsorted freight from every hub (Change 28)
 if XDOCK_ENABLED:
     for c in CLASSES:
@@ -2340,7 +2554,7 @@ def fc(**kw):
 # 20-80% band. The ratio is now set structurally in SupplierCapabilities (one presentation, one
 # recipe), so there is nothing for this table to do.
 # ── Round-2 sort PDC cap (Change 20a) — the DLC hub-overflow divert ───────────────────
-# At most DLC_SMALL_SHARE of the delivery-bound volume may take its SECOND sort off-hub. A Max,
+# At most DLC_MAX_ROUND2_SHARE of the delivery-bound volume may take its SECOND sort off-hub. A Max,
 # not a Min: the solver only uses DLC if it beats sorting at a hub, so this answers "should volume
 # come here?" rather than assuming it does. This is also where the small-parcel share lives until
 # products carry a size attribute.
@@ -2349,7 +2563,7 @@ for d in sorted(ROUND2_PUD_SET):
        destinationname=d, destinationnamegroupbehavior="Aggregate",
        periodname="ALL", periodnamegroupbehavior="Aggregate",
        constrainttype="Max", constraintvalue=r2_pud_vol[d], status="Include",
-       notes=f"round-2 sort PDC cap ({DLC_SMALL_SHARE:.0%} of delivery-bound volume)")
+       notes=f"round-2 sort PDC cap ({DLC_MAX_ROUND2_SHARE:.0%} of delivery-bound volume)")
 # Change 24: minimum viable despatch shipment  → docs/chain2-observed.md#change-24-minimum-viable-despatch-shipment
 if DESPATCH_MIN_SHIPMENT > 0:
     _z2p = clusters.set_index("customername")["pud"]
@@ -2454,6 +2668,7 @@ if BYPASS:
         log.info(f"  Change 29b: single-sort share banded on {_n_band} family x site x class cells "
                  f"(measured +/- {SORT_BAND:.0%}) — only where a round-2 lane offers an "
                  f"alternative, and only on volume that rides a lane out")
+
     # ── Change 29: round-2 ROUTING banded to the measured pairs ───────────────────────
     # The single-sort bands above say HOW MUCH leaves a site sorted once. These say where the
     # rest goes. The despatch product names the origin flavour, and only `_h` sorts `_g`'s
@@ -2501,6 +2716,40 @@ if BYPASS:
              if INTERSTATE_BYPASS == "min_truckload" else ", cost decides the volume")
              + (f", capped at {BYPASS_MAX_SHARE:.0%} of arrivals" if BYPASS_MAX_SHARE else ""))
 
+# ── Rounds beyond the second: pin each one to the volume that was measured taking it ──
+# Without this the third round is optional and costs money, so the solver would route nothing
+# through it and the rounds dial would build a model that quietly behaves like a two-round one.
+# The volume is the entry volume carried through the measured conditionals, one round at a time.
+if ROUNDS >= 3:
+    def _prefix_volume(fam, cls, prefix):
+        """Modelled EA standing at the end of `prefix`, by the measured shares that got it there."""
+        v = VOL.get(fam, {}).get((CODE_SITE.get(prefix[0]), cls), 0)
+        for i in range(1, len(prefix)):
+            v *= PATH_NEXT.get((fam, cls, prefix[:i]), {}).get(prefix[i], 0.0)
+        return v
+
+    _n_rn = 0
+    for (fam, cls, prefix) in CONTINUE_PREFIXES:
+        r, o = len(prefix), CODE_SITE.get(prefix[-1])
+        carry = f"{cls}_{path_tag(fam, prefix[:-1])}_DespatchR{r}_{prefix[-1]}"
+        standing = _prefix_volume(fam, cls, prefix)
+        for nxt in _continues(fam, cls, prefix):
+            d2, share = CODE_SITE.get(nxt), PATH_NEXT[(fam, cls, prefix)][nxt]
+            if o is None or d2 is None or standing <= 0:
+                continue
+            _lo = int(math.floor(max(share - SORT_BAND, 0.0) * standing))
+            _hi = int(math.ceil(min(share + SORT_BAND, 1.0) * standing))
+            for _t, _v in (("Min", _lo), ("Max", _hi)):
+                fc(originname=o, destinationname=d2, productname=carry,
+                   periodname="ALL", periodnamegroupbehavior="Aggregate",
+                   constrainttype=_t, constraintvalue=_v, constraintvalueuom="EA",
+                   status="Include",
+                   notes=f"round {r + 1}: {share:.1%} +/- {SORT_BAND:.0%} of the "
+                         f"{standing:,.0f} EA that reaches {' > '.join(prefix)} goes on to {nxt}")
+            _n_rn += 1
+    log.info(f"  rounds beyond the second: {_n_rn} lanes banded to their measured share "
+             f"(+/- {SORT_BAND:.0%})")
+
 # ── Change 29b: a Min may not exceed what its own arcs can physically carry ───────────
 # NEO reported three violated Mins (Bayswater 727 of 727, Melbourne North, Sunshine West) and
 # nothing here had checked for them: a band named an arc OUT of a site, but that site also
@@ -2541,7 +2790,7 @@ write_csv(pd.DataFrame(fc_rows).reindex(columns=FC_COLS), "FlowConstraints")
 # `AusPost - Sort ByPass v2` model (`inputs/optilogic-model-example/UserDefined*.csv`), generalised
 # and driven from `inputs/factors_assumed/unload_mix.csv`.
 #
-# Default is **off** (`INTERSTATE_UNLOAD=fixed`, `VIC_UNLOAD=free`) — the build is byte-identical
+# Default is **off** (`INTERSTATE_UNLOAD_MIX=fixed`, `VIC_UNLOAD_MIX=free`) — the build is byte-identical
 # until a dial is moved, the same way Changes 24 and 25 were introduced.
 # --------------------------------------------------------------------------------------
 
@@ -2754,7 +3003,7 @@ else:
     for _n in _stale:
         (OUT / f"{_n}.csv").unlink()
     log.info("  Change 33/39: work-centre mix bounds and manual floor OFF "
-             f"(INTERSTATE_UNLOAD={INTERSTATE_UNLOAD}, VIC_UNLOAD={VIC_UNLOAD}, "
+             f"(INTERSTATE_UNLOAD_MIX={INTERSTATE_UNLOAD_MIX}, VIC_UNLOAD_MIX={VIC_UNLOAD_MIX}, "
              f"MANUAL_SORT_SHARE={MANUAL_SORT_SHARE}) — "
              "no UserDefined* tables written, build is byte-identical"
              + (f"; removed {len(_stale)} stale table(s) from a previous bounded run" if _stale else ""))

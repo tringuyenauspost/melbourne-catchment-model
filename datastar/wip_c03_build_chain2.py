@@ -43,6 +43,9 @@ FACTOR_TABLES = {
     "obs_single_sort": "Wip_C02_ObsSingleSort",
     "obs_second_sort": "Wip_C02_ObsSecondSort",
     "obs_round2_sites": "Wip_C02_ObsRound2Sites",
+    # the whole measured path — only a build with more than two rounds reads it, but it is
+    # materialised always so the folder is the same shape whatever HUB_SORT_ROUNDS says
+    "obs_path": "Wip_C02_ObsPath",
     # not an obs_ file and easy to forget: s2a re-derives a ratio from it, so a missing
     # provenance table stops the build rather than changing a number quietly
     "_provenance": "Wip_C02_Provenance",
