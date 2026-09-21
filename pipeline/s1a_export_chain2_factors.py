@@ -1686,6 +1686,40 @@ def derive_paths(p):
     return sorted(rows, key=lambda r: (r[0], r[1], -r[4]))
 
 
+def path_conditionals(rows, allow_return=True):
+    """obs_path rows -> P(next site | the path so far), which is what a round-N build asks.
+
+    obs_path is a JOINT distribution over whole paths; a model builds one round at a time and
+    needs the CONDITIONAL: given a parcel standing at the end of `MPF > TPF`, where does it go
+    for its third sort, and what share stays put and is delivered. Returned as
+
+        {(family, cls, prefix): {next_site or "END": share}}
+
+    where `prefix` is the tuple of buildings already used and every inner dict sums to 1.
+
+    ALLOW_RETURN is the modelling decision, not a measurement: 41.5% of the measured third
+    round goes back to the building it started at (TPF > MGF > TPF is the largest single path),
+    which the two-round model forbids by withholding a site's own flavour and s3b_no_relay
+    deletes outright. With it True the returns are carried as measured; with it False they are
+    dropped and the volume ends one round earlier, which is what the two-round model does today.
+    """
+    nxt = {}
+    for family, cls, path, _n, articles, _share in rows:
+        sites = tuple(path.split(" > "))
+        for i in range(len(sites)):
+            prefix = sites[:i + 1]
+            step = sites[i + 1] if i + 1 < len(sites) else "END"
+            if step != "END" and not allow_return and step in prefix:
+                step = "END"          # the return is not modelled; the journey ends here
+            nxt.setdefault((family, cls, prefix), {})
+            nxt[(family, cls, prefix)][step] = nxt[(family, cls, prefix)].get(step, 0) + articles
+    out = {}
+    for key, counts in nxt.items():
+        tot = sum(counts.values())
+        out[key] = {k: v / tot for k, v in sorted(counts.items(), key=lambda kv: -kv[1])}
+    return out
+
+
 # Stage 4 despatch runs are the same kind of movement as stages 2…  → docs/export_chain2_factors.md#stage-4-despatch-runs-are-the
 ALL_ORIGINS = None
 
