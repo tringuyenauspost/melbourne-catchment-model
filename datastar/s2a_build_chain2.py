@@ -141,7 +141,7 @@ PICKUP_BALANCE = "conserve_supply"            # <-- hold P + IN where origin_mix
 
 # ── INTERSTATE INBOUND UNLOAD ──────────────────────────────────────────────
 # One product, two competing recipes (ULD / long reach). Doc FAQ 2.
-INTERSTATE_UNLOAD   = dial("INTERSTATE_UNLOAD")     # fixed | bounded | free (Change 23)
+INTERSTATE_UNLOAD_MIX   = dial("INTERSTATE_UNLOAD_MIX")     # fixed | bounded | free (Change 23)
 INTERSTATE_ULD_SHARE = dial("INTERSTATE_ULD_SHARE") # used by "fixed" — a PLACEHOLDER
 
 # ── Change 33 (2026-08-13): the work-centre mix as a user-defined constraint ─────────
@@ -149,7 +149,7 @@ INTERSTATE_ULD_SHARE = dial("INTERSTATE_ULD_SHARE") # used by "fixed" — a PLAC
 # UserDefinedVariable is scoped by product AND process at once, which is the missing
 # capability, so it is expressible now. unload_mix.csv carries the shares; see the cell
 # after Groups for the algebra and the n-1 rule.
-VIC_UNLOAD  = dial("VIC_UNLOAD")       # free | bounded — mirrors INTERSTATE_UNLOAD
+VIC_UNLOAD_MIX  = dial("VIC_UNLOAD_MIX")       # free | bounded — mirrors INTERSTATE_UNLOAD_MIX
 WC_MIX_BAND = dial("WC_MIX_BAND")      # half-width of a bound, in share points
 
 # Change 39 : the MANUAL-SORT FLOOR, measured off the scan…  → docs/chain2-observed.md#change-39-the-manual-sort-floor
@@ -196,7 +196,7 @@ HUB_SORT_ROUNDS = dial("HUB_SORT_ROUNDS")    # <-- sort rounds
 # so loudly — a scale above 1.0 is a real ops requirement (more docks, or longer dock hours), not a
 # modelling fudge. Set False to leave the fleet as stated and let the shortfall stand.
 HUB_DOCK_AUTOSCALE = True
-HUB_DOCK_HEADROOM  = dial("HUB_DOCK_HEADROOM")
+HUB_DOCK_BUFFER  = dial("HUB_DOCK_BUFFER")
 
 # MINIMUM VIABLE SHIPMENT  → docs/chain2-observed.md#minimum-viable-shipment
 DESPATCH_MIN_SHIPMENT = dial("DESPATCH_MIN_SHIPMENT")   # EA per arc. 0 = OFF.
@@ -505,7 +505,7 @@ STAGE_PUD_SET = SORT_PUD_SET & DELIVERY_PUD_SET
 PUD_CAPACITY = {_r.pud: int(_r.capacity_ea)
                 for _r in pd.read_csv(FASS / "pud_capacity.csv").itertuples()}
 # LOCAL_KEEP / LOCAL_SHARE: chain-1 dials, moved to the chain-1 notebook.
-FACILITY_HEADROOM = dial("FACILITY_HEADROOM")
+FACILITY_BUFFER = dial("FACILITY_BUFFER")
 
 ORIGIN_TAGS = sorted({origin_tag(p) for p in CLUSTER_OF_PUD})
 # Tags a DELIVERY demand row can carry. Interstate is its own family, not an origin cluster, but it
@@ -537,7 +537,7 @@ log.info(f"periods: {PERIODS}   hub sort rounds: {HUB_SORT_ROUNDS}"
 # Change 51: this used to be fifteen lines of dict surgery that built DLC as a hub and then
 # moved it, popped its code, chased its sorter across and re-pointed a coordinate. sites.csv
 # gives it `role = sort_only` and there is nothing to undo.
-DLC_SMALL_SHARE = dial("DLC_SMALL_SHARE")   # Max round-2 divert share; measured 0.4%, see dials.csv
+DLC_MAX_ROUND2_SHARE = dial("DLC_MAX_ROUND2_SHARE")   # Max round-2 divert share; measured 0.4%, see dials.csv
 
 # CHANGE 30 — THE SORT-ONLY SITES: eight sorting buildings, not…  → docs/chain2-observed.md#change-30-the-sort-only-sites
 # Change 51: sort_only_sites.csv is gone — `role = sort_only` in sites.csv says it, and the
@@ -657,7 +657,7 @@ log.info(f"  sorting sites ({len(ARRIVAL_SET)}): {sorted(HUB_CODE.values())}"
          f"   sort-only: {sorted(HUB_CODE[s] for s in SORT_ONLY_PUDS)}   PDC buildings: {len(PUD_SET)}")
 log.info(f"    round-0 (own pickup): {sorted(_short_ for _short_ in (p.replace('PUD_','') for p in ROUND0_PUD_SET))}")
 log.info(f"    round-2 (off-hub 2nd sort): {[p.replace('PUD_','') for p in sorted(ROUND2_PUD_SET)]}"
-         f"  (cap {DLC_SMALL_SHARE:.0%})")
+         f"  (cap {DLC_MAX_ROUND2_SHARE:.0%})")
 log.info(f"    staging: {[p.replace('PUD_','') for p in sorted(STAGE_PUD_SET)]}"
          f"   delivering: {len(DELIVERY_PUD_SET)}")
 log.info(f"  tag families — pickup {PICKUP_TAGS}")
@@ -780,13 +780,13 @@ log.info("  delivered flavours: "
 # Change 23 — THE INTERSTATE UNLOAD MIX, MADE TO ACTUALLY BIND  → docs/chain2-observed.md#change-23-the-interstate-unload-mix
 PRES_EQ   = {"ULD": "ULD", "LR": "LONGREACH"}          # presentation -> unload machine
 INT_PRES  = {"ULD": INTERSTATE_ULD_SHARE, "LR": round(1 - INTERSTATE_ULD_SHARE, 6)}
-FIXED_PRES = (INTERSTATE_UNLOAD == "fixed")
-assert INTERSTATE_UNLOAD in ("fixed", "free", "bounded")
-assert VIC_UNLOAD in ("free", "bounded"), \
-    f"VIC_UNLOAD is free | bounded (there is no split VIC arrival product), got {VIC_UNLOAD!r}"
+FIXED_PRES = (INTERSTATE_UNLOAD_MIX == "fixed")
+assert INTERSTATE_UNLOAD_MIX in ("fixed", "free", "bounded")
+assert VIC_UNLOAD_MIX in ("free", "bounded"), \
+    f"VIC_UNLOAD_MIX is free | bounded (there is no split VIC arrival product), got {VIC_UNLOAD_MIX!r}"
 # Change 33: `bounded` is now real  → docs/chain2-observed.md#change-33-bounded-is-now-real
-BOUNDED_PRES = (INTERSTATE_UNLOAD == "bounded")
-VIC_BOUNDED  = (VIC_UNLOAD == "bounded")
+BOUNDED_PRES = (INTERSTATE_UNLOAD_MIX == "bounded")
+VIC_BOUNDED  = (VIC_UNLOAD_MIX == "bounded")
 if BOUNDED_PRES:
     _t = UNLOAD_MIX.loc[(UNLOAD_MIX.family == "INTERSTATE")
                         & (UNLOAD_MIX.method == "UNLOAD_ULD"), "target_share"]
@@ -801,7 +801,7 @@ def int_pk(cls, pres=None):
     """The interstate arrival product — presentation-flavoured only when the ratio is pinned."""
     return f"{cls}_INTERSTATE_{pres}_Pickup" if (FIXED_PRES and pres) else f"{cls}_INTERSTATE_Pickup"
 
-log.info(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD.upper()}"
+log.info(f"  Change 23 — interstate unload mix: {INTERSTATE_UNLOAD_MIX.upper()}"
          + (f"  ({', '.join(f'{k} {v:.0%}' for k, v in INT_PRES.items())}, pinned by supplier "
          f"capacity — exact, no constraint)" if FIXED_PRES
          else "  (two competing recipes, solver picks on cost)"))
@@ -828,7 +828,7 @@ _CAL += [
      "19% of interstate is hub-handled, depot-sorted"),
     ("bypass share band  (C2)", "free", f"measured +/- {BYPASS_BAND:.0%}",
      "single-sort share per hub x class, FlowConstraints Min+Max"),
-    ("DLC_SMALL_SHARE  (C3)", "0.15", f"{DLC_SMALL_SHARE}",
+    ("DLC_MAX_ROUND2_SHARE  (C3)", "0.15", f"{DLC_MAX_ROUND2_SHARE}",
      "off-hub round-2 measured at 0.37% of delivered volume"),
 ]
 log.info("Change 26 + 27 — chain-2 calibrated, then constrained, from the 20 May 2026 scan extract")
@@ -1323,7 +1323,7 @@ _arr_pud = {p: sum(sum(VOL[f].get((p, c), 0) for f in ARR_FAMS)
 # Bayswater keeps a 937 EA residual that neither term explains and that this notebook's own
 # quantities cannot source — NEO counts something here we are not reproducing exactly. The
 # headroom absorbs it (the cap lands 966 EA above the activity), so if a later run bites at
-# Bayswater again the dial to move is FACILITY_HEADROOM, not this formula.
+# Bayswater again the dial to move is FACILITY_BUFFER, not this formula.
 _stg_pud = {p: sum(STAGE_BY_PUD.get((p, c), 0) for c in CLASSES)
             for p in sorted(DELIVERY_PUD_SET)}
 def _round2_inbound(depot):
@@ -1341,12 +1341,12 @@ def _round2_inbound(depot):
 _r2_pud = {p: _round2_inbound(p) for p in sorted(DELIVERY_PUD_SET)}
 _lifted, _reason = {}, {}
 log.info(f"  facility load check (delivery + arrivals + stage + round-2 inbound vs PUD_CAPACITY, "
-         f"+{FACILITY_HEADROOM:.0%} headroom):")
+         f"+{FACILITY_BUFFER:.0%} buffer):")
 for d in sorted(DELIVERY_PUD_SET):
     load = (float(_dem_pud.get(d, 0)) + float(_arr_pud.get(d, 0))
             + float(_stg_pud.get(d, 0)) + float(_r2_pud.get(d, 0)))
     cap  = PUD_CAPACITY.get(d, 0)
-    want = math.ceil(load * (1 + FACILITY_HEADROOM))
+    want = math.ceil(load * (1 + FACILITY_BUFFER))
     if want > cap:
         _lifted[d], _reason[d] = want, ("over ops cap" if load > cap else "headroom only")
         _extra = ("" if not _r2_pud.get(d) else
@@ -1838,16 +1838,16 @@ def _machines(site):
     return list(dict.fromkeys(ms))
 
 # ── Round-2 sort PDC: how much may divert off the hubs (Change 20a) ────────────────────
-# Round-2 volume is everything still needing a second sort = D - stage. DLC_SMALL_SHARE caps the
+# Round-2 volume is everything still needing a second sort = D - stage. DLC_MAX_ROUND2_SHARE caps the
 # slice that may take that sort at a PDC instead of a hub — the stand-in for "the small-parcel
 # share" until products carry a size attribute. A Max, not a pin.
 _R2_VOL    = D_TOTAL - STAGE_TOT
-r2_pud_vol = {p: int(round(DLC_SMALL_SHARE * _R2_VOL)) for p in sorted(ROUND2_PUD_SET)}
+r2_pud_vol = {p: int(round(DLC_MAX_ROUND2_SHARE * _R2_VOL)) for p in sorted(ROUND2_PUD_SET)}
 # its docks are sized to that slice (plus the same headroom the hubs get), expressed as a rate/hr
 # because capacity here is rate x operating window, not a flat daily figure.
-PUD_R2_DOCK_HR = {p: v * (1 + HUB_DOCK_HEADROOM) / AVAILABLE_HOURS_PER_DAY["UNLOAD"]
+PUD_R2_DOCK_HR = {p: v * (1 + HUB_DOCK_BUFFER) / AVAILABLE_HOURS_PER_DAY["UNLOAD"]
                   for p, v in r2_pud_vol.items()}
-log.info(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_SMALL_SHARE:.0%} -> "
+log.info(f"  round-2 sort PDC: {_R2_VOL:,} EA/day need a 2nd sort; cap {DLC_MAX_ROUND2_SHARE:.0%} -> "
          + ", ".join(f"{_short(k)} {v:,}" for k, v in r2_pud_vol.items()) + " (rest stays at the hubs)")
 
 # ── Hub dock sizing (Change 14) ────────────────────────────────────────────────────────
@@ -1872,7 +1872,7 @@ _r2_pool  = {h: (sum(IN_by_hub_class[(g, c)] for c in CLASSES for g in cls_hubs(
 _r2_even  = _r2_touch / max(len(R2_SORT_SITES), 1)
 _dock_base = sum(RATE_HR[a] for a in UNLOADS) * AVAILABLE_HOURS_PER_DAY["UNLOAD"]
 _dock_day  = len(HUB_SET) * _dock_base
-_need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_HEADROOM)
+_need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_BUFFER)
          for h in sorted(ARRIVAL_SET)}
 HUB_DOCK_SCALE = ({h: max(1.0, _need[h] / _dock_base) for h in sorted(ARRIVAL_SET)}
                   if HUB_DOCK_AUTOSCALE else {h: 1.0 for h in sorted(ARRIVAL_SET)})
@@ -1918,15 +1918,15 @@ for site in sorted(set(list(SORT_SITES) + list(DELIVERY_PUD_SET) + list(ROUND2_P
                         "", ""])
 # driver waves at the delivery PDCs
 lm_by_pud = base.groupby("pud")["parcel_count"].sum()   # base carries `pud` since Change 12
-WAVE_RATE, WAVE_VAN = dial("WAVE_RATE"), dial("WAVE_VAN")
+DELIVERED_PER_HOUR, VAN_CAPACITY = dial("DELIVERED_PER_HOUR"), dial("VAN_CAPACITY")
 for site in sorted(DELIVERY_PUD_SET):
     win = window("DRIVER_WAVE")
     peak = max(PERIOD_SPLIT["delivery"][p] for p in PERIODS)      # size for the busiest period
     vol = lm_by_pud.get(site, 0) * peak
-    drivers = math.ceil(vol / min(WAVE_VAN, WAVE_RATE * win)) if vol else 0
+    drivers = math.ceil(vol / min(VAN_CAPACITY, DELIVERED_PER_HOUR * win)) if vol else 0
     wc_rows.append([f"WC_DRIVER_WAVE_{_short(site)}", site, "Include", "Open", "Existing",
-                    int(drivers * WAVE_RATE * win), "EA", round(FIXED_YR["DRIVER_WAVE"] / WORKING_DAYS),
-                    "", "", "", f"{drivers} drivers x {WAVE_RATE}/hr x {win}h per period "
+                    int(drivers * DELIVERED_PER_HOUR * win), "EA", round(FIXED_YR["DRIVER_WAVE"] / WORKING_DAYS),
+                    "", "", "", f"{drivers} drivers x {DELIVERED_PER_HOUR}/hr x {win}h per period "
                     f"(sized on the busiest period, {peak:.0%} of the day)", "", ""])
     site_machines.setdefault(site, [])
     site_machines[site] = site_machines[site] + ["DRIVER_WAVE"]
@@ -2554,7 +2554,7 @@ def fc(**kw):
 # 20-80% band. The ratio is now set structurally in SupplierCapabilities (one presentation, one
 # recipe), so there is nothing for this table to do.
 # ── Round-2 sort PDC cap (Change 20a) — the DLC hub-overflow divert ───────────────────
-# At most DLC_SMALL_SHARE of the delivery-bound volume may take its SECOND sort off-hub. A Max,
+# At most DLC_MAX_ROUND2_SHARE of the delivery-bound volume may take its SECOND sort off-hub. A Max,
 # not a Min: the solver only uses DLC if it beats sorting at a hub, so this answers "should volume
 # come here?" rather than assuming it does. This is also where the small-parcel share lives until
 # products carry a size attribute.
@@ -2563,7 +2563,7 @@ for d in sorted(ROUND2_PUD_SET):
        destinationname=d, destinationnamegroupbehavior="Aggregate",
        periodname="ALL", periodnamegroupbehavior="Aggregate",
        constrainttype="Max", constraintvalue=r2_pud_vol[d], status="Include",
-       notes=f"round-2 sort PDC cap ({DLC_SMALL_SHARE:.0%} of delivery-bound volume)")
+       notes=f"round-2 sort PDC cap ({DLC_MAX_ROUND2_SHARE:.0%} of delivery-bound volume)")
 # Change 24: minimum viable despatch shipment  → docs/chain2-observed.md#change-24-minimum-viable-despatch-shipment
 if DESPATCH_MIN_SHIPMENT > 0:
     _z2p = clusters.set_index("customername")["pud"]
@@ -2790,7 +2790,7 @@ write_csv(pd.DataFrame(fc_rows).reindex(columns=FC_COLS), "FlowConstraints")
 # `AusPost - Sort ByPass v2` model (`inputs/optilogic-model-example/UserDefined*.csv`), generalised
 # and driven from `inputs/factors_assumed/unload_mix.csv`.
 #
-# Default is **off** (`INTERSTATE_UNLOAD=fixed`, `VIC_UNLOAD=free`) — the build is byte-identical
+# Default is **off** (`INTERSTATE_UNLOAD_MIX=fixed`, `VIC_UNLOAD_MIX=free`) — the build is byte-identical
 # until a dial is moved, the same way Changes 24 and 25 were introduced.
 # --------------------------------------------------------------------------------------
 
@@ -3003,7 +3003,7 @@ else:
     for _n in _stale:
         (OUT / f"{_n}.csv").unlink()
     log.info("  Change 33/39: work-centre mix bounds and manual floor OFF "
-             f"(INTERSTATE_UNLOAD={INTERSTATE_UNLOAD}, VIC_UNLOAD={VIC_UNLOAD}, "
+             f"(INTERSTATE_UNLOAD_MIX={INTERSTATE_UNLOAD_MIX}, VIC_UNLOAD_MIX={VIC_UNLOAD_MIX}, "
              f"MANUAL_SORT_SHARE={MANUAL_SORT_SHARE}) — "
              "no UserDefined* tables written, build is byte-identical"
              + (f"; removed {len(_stale)} stale table(s) from a previous bounded run" if _stale else ""))

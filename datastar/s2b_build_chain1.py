@@ -201,8 +201,8 @@ def generate():
     assert d1("REGIONAL_PICKUP_TERMINATE") == REG_HUB
     assert d1("PEAK_ROUNDING") == "floor"
     _dl = pd.read_csv(FASS / "dials.csv").set_index("parameter")
-    DOCK_HEAD = float(_dl.loc["HUB_DOCK_HEADROOM", "value"])
-    FAC_HEAD  = float(_dl.loc["FACILITY_HEADROOM", "value"])
+    DOCK_HEAD = float(_dl.loc["HUB_DOCK_BUFFER", "value"])
+    FAC_HEAD  = float(_dl.loc["FACILITY_BUFFER", "value"])
     HOURS = dict(zip(*pd.read_csv(FASS / "operating_hours.csv")[["kind", "hours_per_day"]].T.values))
     MACH  = pd.read_csv(FASS / "machine_rates.csv").set_index("machine")
     SORTERS = {}

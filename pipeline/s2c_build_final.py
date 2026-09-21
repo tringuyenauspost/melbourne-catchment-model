@@ -183,7 +183,7 @@ _rate = pd.read_csv(FASS / "machine_rates.csv").set_index("machine")["rate_hr"].
 for _r in pd.read_csv(FASS / "site_sorters.csv").itertuples():
     _rate[(_r.site, _r.machine)] = _r.rate_hr
 _hrs = dict(zip(*pd.read_csv(FASS / "operating_hours.csv")[["kind", "hours_per_day"]].T.values))
-_head = float(pd.read_csv(FASS / "dials.csv").set_index("parameter").loc["HUB_DOCK_HEADROOM",
+_head = float(pd.read_csv(FASS / "dials.csv").set_index("parameter").loc["HUB_DOCK_BUFFER",
                                                                         "value"])
 
 def _machine_of(wcname, facility):
