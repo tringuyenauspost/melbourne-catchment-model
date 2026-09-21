@@ -12,6 +12,7 @@
 # 2. Add back the code / docs we do want to upload
 !/.gitignore
 !/pipeline/
+!/datastar/
 !/docs/
 !/plotting/
 !/utilities/
