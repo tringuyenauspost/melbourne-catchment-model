@@ -42,6 +42,7 @@ log = get_logger(__file__)
 HERE = DATA_ROOT                                    # kept: the docstrings and messages name it
 SCAN = RAW / "all_scan_for_melbourne_pdc_20052026.csv"
 CACHE = OUT / "consignment_paths.pkl"
+PATHMETA = OUT / "paths_meta.json"       # the path dials the cache was built under
 COVJSON = OUT / "event_coverage.json"    # written beside the cache; needs the raw scan file
 PDCJSON = OUT / "pdc_basis.json"         # what the delivering-depot basis cost, for the diagram
 OUT_PATH = OUT / "full_path.csv"
@@ -798,7 +799,20 @@ def path_chain(raw, own, state, group=None):
 # THE MODEL HAS TWO SORT ROUNDS, SO THE PATH IS CAPPED AT TWO  → docs/export_chain2_factors.md#the-model-has-two-sort-rounds
 PATH_BASIS = "facility_path"     # facility_path | machine_sort (the role basis, unchanged)
 PATH_TOUCH_BAR = "entry"         # which EVIDENCE bar may name a building
-PATH_DEPTH = 2                   # buildings kept before the delivering depot
+def _dial_int(key, default):
+    """One dial, read before read_dials() exists. Absent file or key -> the default, because
+    the depth has to resolve while PART 1 is still being defined."""
+    try:
+        d = pd.read_csv(FASS / "dials.csv").set_index("parameter")["value"]
+        return int(d[key]) if key in d.index else default
+    except Exception:
+        return default
+
+
+# How many of OUR buildings a parcel's path may carry before its depot. 2 is the shipped value
+# and the whole model is built for it; 3 is what a third sort round would need to be measured
+# from, and it changes obs_path.csv (never obs_legs.csv, which stops at the second building).
+PATH_DEPTH = _dial_int("PATH_DEPTH", 2)   # buildings kept before the delivering depot
 PATH_CAP_RULE = "first_last"     # first_last | first_n
 
 
@@ -1305,7 +1319,24 @@ def print_state_summary(p):
         log.info(row(lab, q[m]))
 
 
+def _path_dials():
+    """The four settings that decide what a cached path IS."""
+    return {"path_basis": PATH_BASIS, "path_touch_bar": PATH_TOUCH_BAR,
+            "path_depth": PATH_DEPTH, "path_cap_rule": PATH_CAP_RULE}
+
+
 def load_paths(rebuild=False):
+    # A CACHE BUILT AT ANOTHER DEPTH IS A DIFFERENT MEASUREMENT. The columns are identical -- the
+    # column test below cannot see it -- but `path_sites` is capped at build time, so a cache made
+    # at PATH_DEPTH=2 answers "where did it go second" with the LAST building while a depth of 3
+    # answers with the middle one. Moving the dial and reading the old cache would export factors
+    # for a depth nobody asked for, in silence.
+    if CACHE.exists() and not rebuild:
+        _was = json.loads(PATHMETA.read_text()) if PATHMETA.exists() else None
+        if _was != _path_dials():
+            log.info(f"  the cached reduction was built under {_was or 'unrecorded path dials'}; "
+                     f"this run wants {_path_dials()} — rebuilding")
+            rebuild = True
     if CACHE.exists() and COVJSON.exists() and not rebuild:
         p = pd.read_pickle(CACHE)
         # the notebook writes this cache too; rebuild if it is an older, narrower version
@@ -1323,6 +1354,7 @@ def load_paths(rebuild=False):
     p = build_paths()
     p.to_csv(OUT_PATH, index=False)
     p.to_pickle(CACHE)
+    PATHMETA.write_text(json.dumps(_path_dials(), indent=1))
     return p
 
 
@@ -1622,6 +1654,38 @@ def derive_stages(p):
     return demand, recv_entry, legs, deliver_rows, vic_xd
 
 
+def derive_paths(p):
+    """The WHOLE path a parcel took, as one row per distinct path — the third round's evidence.
+
+    obs_legs answers "where did it go for its second sort", which is all a two-round model can
+    ask. This answers "which buildings, in order", which is what a model with more rounds than
+    two needs and what PATH_DEPTH decides the length of. At the shipped depth of 2 the two
+    tables carry the same information in different shapes; above it, only this one grows.
+
+    Same cohort and the same exclusion as derive_stages: staged freight rides no sort lane, so
+    it would dilute every routing share with yesterday's parcels.
+
+    RAW, not folded. The fold is a modelling choice about which lanes survive, and a path is
+    not a lane — folding a three-building path onto its two-building prefix is the kind of
+    decision that belongs where the rounds are built, not here, where it would be invisible.
+    """
+    q = cohort(p)
+    s = q[q.fam != "METRO_DEPOT"]
+    # `site` is the entry, path_sites[0] where there is a path and the assumed rung where there
+    # is not; the hops after it are what a deeper PATH_DEPTH lengthens.
+    paths = [" > ".join([e] + list(ss[1:])) if isinstance(ss, (list, tuple)) and len(ss) > 1
+             else e for e, ss in zip(s.site, s.path_sites)]
+    g = s.assign(_path=paths).groupby(["fam", "cls", "_path"]).articles.sum()
+    tot = {}
+    for (f, c, path), a in g.items():
+        tot[(f, c, path.split(" > ")[0])] = tot.get((f, c, path.split(" > ")[0]), 0) + int(a)
+    rows = []
+    for (f, c, path), a in g.items():
+        e = path.split(" > ")[0]
+        rows.append((f, c, path, path.count(" > ") + 1, int(a), round(int(a) / tot[(f, c, e)], 6)))
+    return sorted(rows, key=lambda r: (r[0], r[1], -r[4]))
+
+
 # Stage 4 despatch runs are the same kind of movement as stages 2…  → docs/export_chain2_factors.md#stage-4-despatch-runs-are-the
 ALL_ORIGINS = None
 
@@ -1768,6 +1832,12 @@ def main(argv=None):
         w(xd_f, "obs_recv_entry", ["cls", "recv", "entry", "articles", "share_of_recv"])
         w(r2_f, "obs_round2", ["family", "cls", "entry", "dest", "articles", "share_of_entry"])
     w(dl_f, "obs_delivery", ["cls", "exit", "pud", "articles", "share_of_exit"])
+    # The path table is written at every depth, so the two-round build and a deeper one read the
+    # same file rather than one appearing when a dial moves. At PATH_DEPTH=2 every row is one or
+    # two buildings and obs_legs says the same thing; above it, this is the only table that
+    # knows where the third sort happened.
+    w(derive_paths(p), "obs_path",
+      ["family", "cls", "path", "buildings", "articles", "share_of_entry"])
     w(single_f, "obs_single_sort", ["family", "cls", "site", "single_share", "articles"])
     w(r2, "obs_round2_sites", ["site", "share", "articles"])
     # THE ONE MEASUREMENT THAT USED TO LIVE IN _provenance.csv. It is a FACTOR — s2a reads it and

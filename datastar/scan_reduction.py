@@ -89,6 +89,7 @@ log = logging.getLogger("melb.scan_reduction")
 HERE = DATA_ROOT                                    # kept: the docstrings and messages name it
 SCAN = RAW / "all_scan_for_melbourne_pdc_20052026.csv"
 CACHE = OUT / "consignment_paths.pkl"
+PATHMETA = OUT / "paths_meta.json"       # the path dials the cache was built under
 COVJSON = OUT / "event_coverage.json"    # written beside the cache; needs the raw scan file
 PDCJSON = OUT / "pdc_basis.json"         # what the delivering-depot basis cost, for the diagram
 OUT_PATH = OUT / "full_path.csv"
@@ -934,7 +935,19 @@ def path_chain(raw, own, state, group=None):
 # THE MODEL HAS TWO SORT ROUNDS, SO THE PATH IS CAPPED AT TWO  → docs/export_chain2_factors.md#the-model-has-two-sort-rounds
 PATH_BASIS = "facility_path"     # facility_path | machine_sort (the role basis, unchanged)
 PATH_TOUCH_BAR = "entry"         # which EVIDENCE bar may name a building
-PATH_DEPTH = 2                   # buildings kept before the delivering depot
+def _dial_int(key, default):
+    """One dial, read before read_dials() exists. Absent file or key -> the default."""
+    try:
+        d = pd.read_csv(FASS / "dials.csv").set_index("parameter")["value"]
+        return int(d[key]) if key in d.index else default
+    except Exception:
+        return default
+
+
+# Read from dials.csv so the platform and the repo agree about the depth: macro 2 builds the
+# reduction and macro 3 builds the model from it, and a depth they disagreed about would be a
+# measurement of one shape feeding a model of another.
+PATH_DEPTH = _dial_int("PATH_DEPTH", 2)   # buildings kept before the delivering depot
 PATH_CAP_RULE = "first_last"     # first_last | first_n
 
 
@@ -1441,9 +1454,26 @@ def print_state_summary(p):
         log.info(row(lab, q[m]))
 
 
+def _path_dials():
+    """The four settings that decide what a cached path IS."""
+    return {"path_basis": PATH_BASIS, "path_touch_bar": PATH_TOUCH_BAR,
+            "path_depth": PATH_DEPTH, "path_cap_rule": PATH_CAP_RULE}
+
+
 def load_paths(rebuild=False):
     if _PATHS is not None:
         return _PATHS
+    # A CACHE BUILT AT ANOTHER DEPTH IS A DIFFERENT MEASUREMENT. The columns are identical -- the
+    # column test below cannot see it -- but `path_sites` is capped at build time, so a cache made
+    # at PATH_DEPTH=2 answers "where did it go second" with the LAST building while a depth of 3
+    # answers with the middle one. Moving the dial and reading the old cache would export factors
+    # for a depth nobody asked for, in silence.
+    if CACHE.exists() and not rebuild:
+        _was = json.loads(PATHMETA.read_text()) if PATHMETA.exists() else None
+        if _was != _path_dials():
+            log.info(f"  the cached reduction was built under {_was or 'unrecorded path dials'}; "
+                     f"this run wants {_path_dials()} — rebuilding")
+            rebuild = True
     if CACHE.exists() and COVJSON.exists() and not rebuild:
         p = pd.read_pickle(CACHE)
         # the notebook writes this cache too; rebuild if it is an older, narrower version
@@ -1461,6 +1491,7 @@ def load_paths(rebuild=False):
     p = build_paths()
     p.to_csv(OUT_PATH, index=False)
     p.to_pickle(CACHE)
+    PATHMETA.write_text(json.dumps(_path_dials(), indent=1))
     return p
 
 

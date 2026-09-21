@@ -900,13 +900,34 @@ log.info("  The two transport facilities sit on borrowed coordinates, so those p
 PRODUCT_COLS = ["productname", "status", "unitvolume", "unitweight", "notes"]
 CLASSES = ["EP", "PP"]
 # A SWITCH, NOT A COUNT. Everything below asks `TWO_ROUNDS`, so any value that is not 2 builds
-# the ONE-round five-state chain — a 3 would quietly produce a smaller model than a 2, and the
-# first thing to complain would be an assert about a broken BOM chain that names neither dial.
-# Three rounds is not a setting: it is a third set of states (Unloaded3/Sorted3/Despatch3), the
-# lanes between them, and a measurement that can see a third building — PATH_DEPTH is 2.
+# the ONE-round five-state chain — a 3 would quietly produce a SMALLER model than a 2, and the
+# first thing to complain would be an assert about a broken BOM chain naming neither dial.
+#
+# WHAT A THIRD ROUND WOULD TAKE, and why it is not a dial. Measured off the reduction
+# (2026-09-21): 10,764 EA, 6.48% of the cohort, touch three or more of our buildings before
+# their depot — 8,533 at three, 1,544 at four, 687 at five or more. So a third round is REAL,
+# and it is not modelled: PATH_DEPTH=2 with first_last keeps the first and last building and
+# folds 14,352 interior touches away. Three things are missing, and none of them is code:
+#
+#   1. A MEASURED THIRD HOP. Round-2 routing is OBS_LEGS, a measured (family, class, entry,
+#      dest2) matrix. There is no (…, dest3): the exporter cannot write one while the path is
+#      capped at two buildings, so a third round's routing would have to be invented.
+#   2. A FLAVOUR THAT REMEMBERS ROUND 2. `INTERSTATE_<h>` carries where the parcel ENTERED,
+#      and nothing else. Round 2 is granted anywhere except the flavour's own site; round 3
+#      cannot be withheld from the round-2 site because no product knows what it was. Carrying
+#      it means the flavour becomes a PAIR of sites — every family's product count goes from
+#      `sites` to `sites x (sites-1)`, roughly 17 flavours to 80, and the lanes with them.
+#   3. A RULE FOR WHERE ROUND 3 MAY HAPPEN. Among the 3+ building parcels the commonest paths
+#      RETURN to the first building — TPF->TPF 2,178 EA, MPF->MPF 974, SWP->SWP 396. A third
+#      round modelled without a rule mostly books A->B->A, which is exactly what
+#      s3b_no_relay.py exists to forbid.
+#
+# Until those three are decided, a value above 2 is refused by name rather than half-built.
 assert HUB_SORT_ROUNDS in (1, 2), (
     f"HUB_SORT_ROUNDS is a 1-or-2 switch and is {HUB_SORT_ROUNDS}. 1 = five-state chain, "
-    f"2 = a second sort exists. A third round is a model change, not a dial.")
+    f"2 = a second sort exists. A third round needs a measured third hop (obs_legs stops at "
+    f"dest2), a flavour that remembers round 2, and a rule for where round 3 may happen — "
+    f"see the note above this assert.")
 TWO_ROUNDS = HUB_SORT_ROUNDS == 2
 
 # Change 25: the bypass is a second RECIPE for a product that already exists
