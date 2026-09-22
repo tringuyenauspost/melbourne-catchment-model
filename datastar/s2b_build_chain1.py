@@ -52,6 +52,11 @@ def d1(name):
     r = _d1.loc[name]
     return _CAST[r["kind"]](r["value"])
 
+def d1_opt(name, default):
+    """A dial that may be absent from an older dials_chain1.csv. Used for PICKUP_WEIGHTS, whose
+    default reproduces the build that existed before it."""
+    return d1(name) if name in _d1.index else default
+
 def write(df, name):
     df.to_csv(OUT / f"{name}.csv", index=False, encoding="utf-8-sig")
     log.info(f"  ✓ {name+'.csv':<32} {len(df):>7,} rows")
@@ -297,6 +302,41 @@ def generate():
     _c = shapely.centroid(shapely.from_wkt(gj.pop("geometry")))
     gj["lat"], gj["lon"] = shapely.get_y(_c), shapely.get_x(_c)
     gj["sup"] = "SUP_PKP_" + gj.node.map(ORIGIN_TAG) + "_" + gj.post_code.astype(int).astype(str)
+
+    # ── how a site's collection splits across its catchments ──────────────────────────
+    # DEFAULT: equally. Every postcode a site touches is modelled as collecting the same
+    # volume, which is what this build did before PICKUP_WEIGHTS existed and what it still
+    # does when the dial is empty — the equal-split arithmetic below is kept verbatim rather
+    # than expressed as a weight of 1/NCAT, so "off" is byte-identical and not merely equal to
+    # within floating point.
+    #
+    # WEIGHTED: the dial names a CSV of (facility_name, post_code, weight) in inputs/melbourne/.
+    # Weights are a SHAPE only — they sum to 1 within a site, so the site total, the pin, what
+    # each building handles, the work centres and the facility caps are all untouched. Only the
+    # per-catchment supply caps move. A catchment the file does not list is DROPPED: the weights
+    # file is the authority on which cells collect anything (postcodes reached only on a
+    # delivery booking, or only at another site's dock, collect nothing from the public).
+    # pandas reads an empty cell as NaN and str(NaN) is the truthy "nan", so the off states are
+    # spelled out rather than tested for emptiness
+    WFILE = d1_opt("PICKUP_WEIGHTS", "")
+    WFILE = "" if WFILE.strip().lower() in ("", "nan", "none") else WFILE.strip()
+    if WFILE:
+        _w = pd.read_csv(RAW / WFILE)
+        _need = {"facility_name", "post_code", "weight"}
+        assert _need <= set(_w.columns), f"{WFILE} needs {sorted(_need)}, has {sorted(_w.columns)}"
+        _bad = _w.groupby("facility_name").weight.sum().sub(1).abs().max()
+        assert _bad < 1e-6, f"{WFILE}: weights do not sum to 1 within a site (off by {_bad})"
+        assert set(_w.facility_name) <= set(gj.facility_name), (
+            f"{WFILE} weights a site the polygons do not have: "
+            f"{sorted(set(_w.facility_name) - set(gj.facility_name))}")
+        _n0 = len(gj)
+        gj = gj.merge(_w[["facility_name", "post_code", "weight"]],
+                      on=["facility_name", "post_code"], how="inner")
+        assert len(gj) == len(_w), (
+            f"{WFILE} has {len(_w)} rows but only {len(gj)} matched a polygon — a weighted "
+            "(facility, postcode) is missing from CATCHMENT_POLYGONS")
+        log.info(f"    pickup weights from {WFILE}: {len(gj):,} catchments carry a weight, "
+                 f"{_n0 - len(gj)} dropped as collecting nothing")
     NCAT = gj.node.value_counts().to_dict()
 
     site_tot = {p: math.floor(v * FACTOR) for p, v in PEAK.items()}
@@ -304,9 +344,26 @@ def generate():
     for p, tot in site_tot.items():
         want = {"PP": int(tot * PP_SHARE)}
         want["EP"] = tot - want["PP"]
+        cells = gj[gj.node == p]
         for c in CLASSES:
-            PERCAT[(p, c)] = math.ceil(want[c] / NCAT[p] * 100) / 100
-            PIN[(p, c)]    = math.floor(NCAT[p] * PERCAT[(p, c)])
+            if WFILE:
+                # each catchment's own cap, rounded UP to the cent exactly as the equal split
+                # rounds its single cap, so the caps still sum to at least the pin — the
+                # SUP_PKP_* Site Production Capacity guard PEAK_ROUNDING relies on
+                caps = {int(r.post_code): math.ceil(r.weight * want[c] * 100) / 100
+                        for r in cells.itertuples()}
+                for pc_, v_ in caps.items():
+                    PERCAT[(p, pc_, c)] = v_
+                PIN[(p, c)] = math.floor(sum(caps.values()))
+            else:
+                one = math.ceil(want[c] / NCAT[p] * 100) / 100
+                for pc_ in cells.post_code.astype(int):
+                    PERCAT[(p, pc_, c)] = one
+                PIN[(p, c)] = math.floor(NCAT[p] * one)
+            assert sum(PERCAT[(p, int(r.post_code), c)] for r in cells.itertuples()) \
+                   >= PIN[(p, c)] - 1e-9, (
+                f"{short(p)} {c}: per-catchment caps sum below the pin — the supply guard is "
+                "broken, so the solver could not meet the Min equality")
     METRO_P = sum(PIN.values())
     TOTAL_P = round(METRO_P / METRO_SH)
     REG_P   = TOTAL_P - METRO_P
@@ -507,7 +564,8 @@ def generate():
         for c in CLASSES:
             pr = f"{c}_{ORIGIN_TAG[r.node]}_Pickup"
             cap.append({"suppliername": r.sup, "productname": pr, "status": "Include",
-                        "supplycapacity": PERCAT[(r.node, c)], "supplycapacityuom": "EA",
+                        "supplycapacity": PERCAT[(r.node, int(r.post_code), c)],
+                        "supplycapacityuom": "EA",
                         "notes": "catchment pickup, ALL"})
             # where the collection is DELIVERED. Normally its own depot; for a service site the
             # truck never stops there, so it is procured straight into each despatch destination.
