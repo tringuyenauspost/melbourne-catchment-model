@@ -39,12 +39,24 @@ within a site and the site total stays pinned by PEAK_2025_* — it redistribute
 site's remaining postcodes. Set the flag False to weight them on their own-building stops
 instead, which is the "exclude own PDC only" reading.
 
-THE PER-SITE FILTER IS ASYMMETRIC ON PURPOSE. It reproduces the catchment notebook, and the
-notebook is right: the transports' Network stops are our own buildings (Melbourne Parcel
-Facility 15,860 EA, Dandenong Letters Centre 9,116, Tullamarine PF, Melbourne North PDC) and
-that is linehaul, so they are filtered to Customer. The red vans' Network stops are LPOs
-(7,115 stops), street posting boxes ("Clear SPBs as listed: Red") and lockers, which are
-genuine first mile, so they are kept.
+THE PER-SITE FILTER IS ASYMMETRIC ON PURPOSE, but only over our OWN BUILDINGS. Both site types
+keep customer pickups and keep lodgement points; the transports additionally drop their other
+Network stops, because those are linehaul. The booking comments say so outright — "Collect all
+for Mulgrave PDC", "Collect for TPF - Priority Western Forwards", "Collect for Darebin PDC" —
+they name a destination building, and 583 of them are collecting EMPTY equipment rather than
+freight. The red vans' Network stops are post offices (7,025), retail outlets, street posting
+boxes ("Clear SPBs as listed: Red") and lockers, which are genuine first mile.
+
+LODGEMENT AT THE TRANSPORTS (added 2026-09-22, at the user's direction). The transports clear
+post offices on their country runs, and filtering them to Customer dropped that: 62 stops a
+week at Abbotsford, Romsey, Lancefield, Woodend, Gisborne, Cockatoo and Gembrook. Customers
+lodging at one of our points IS first-mile volume — it is the same thing the red vans collect
+at an LPO — so it counts. This is +2.2% of the transport stop base and SEVEN new cells, which
+utilities/add_transport_lodgement_catchments.py adds to the polygon file.
+
+WHAT IS STILL EXCLUDED, and why it is not lodgement: 6,046 transport Network stops a week at
+Melbourne Parcel Facility, Tullamarine, Dandenong Letters, Sunshine West PDC, Melbourne North
+PDC, Bayswater PDC. Freight already inside our network, moving between our own buildings.
 
     python utilities/catchment_visit_weights.py
 """
@@ -66,6 +78,11 @@ COLLECTING = ["Pickup", "Pickup & Delivery"]
 # our own buildings, tested over Location Type == Network ONLY (see docstring)
 OWN = (r"PDC|PARCEL FACILITY|LETTERS CENTRE|VAN OP|VAN SERV|TRANSPORT|GATEWAY"
        r"|\bDC\b|\bMDC\b|STARTRACK|DELIVERY CENTRE")
+# places the public lodges: post offices (LPO / RP, a retail outlet), lockers, posting boxes.
+# RP is Retail Post, NOT one of our operational buildings — "Collins St West RP (Melbourne
+# GPO)", "Malvern RP", "Coburg RP" — and the red-van sites already collect 2,144 RP stops a
+# week, so treating it as an own-building name would delete real lodgement.
+LODGE = r"\bLPO\b|POST OFFICE|POSTSHOP|\bRP\b|LOCKER|POST BOX|POSTING BOX|\bSPB\b"
 # the level, for the report's EA columns only — mirrors dials_chain1.csv
 PEAK = {"Melbourne Transport": 351535, "Sunshine West Van Services": 96849,
         "Oakleigh South Van Operations": 57493, "Melbourne North Van Operations": 43515,
@@ -108,12 +125,14 @@ def load_ccp():
 def collection_slice(w):
     """The jobs that are a collection from the public, on each site's own filter."""
     wk = w[w.day.astype(str).between(*WINDOW)].copy()
+    _name = wk.loc_name.astype(str).str.upper()
+    _own = wk.loc_type.eq("Network") & _name.str.contains(OWN, regex=True, na=False)
+    _lodge = wk.loc_type.eq("Network") & _name.str.contains(LODGE, regex=True, na=False)
     is_tr = wk.facility.isin(TRANSPORTS)
-    sel = ((is_tr & wk.loc_type.eq("Customer") & wk.booking_type.eq("Pickup"))
+    sel = ((is_tr & wk.booking_type.isin(COLLECTING) & (wk.loc_type.eq("Customer") | (_lodge & ~_own)))
            | (~is_tr & wk.booking_type.isin(COLLECTING)))
     col = wk[sel].copy()
-    col["own"] = (col.loc_type.eq("Network")
-                  & col.loc_name.astype(str).str.upper().str.contains(OWN, regex=True, na=False))
+    col["own"] = _own[sel]
     print(f"Mon-Fri {WINDOW[0]}..{WINDOW[1]}: {len(wk):,} jobs -> {len(col):,} collection jobs, "
           f"of which {col.own.sum():,} at our own buildings (excluded)")
     return col
