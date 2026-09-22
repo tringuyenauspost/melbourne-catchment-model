@@ -1,0 +1,217 @@
+<title>How a Postcode Gets Its Share</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  --page:#f4f6f8; --surface:#ffffff; --surface-2:#f8fafb; --surface-3:#eef1f4;
+  --ink:#0e1419; --ink-2:#414c55; --muted:#78838c;
+  --line:#e0e5ea; --line-strong:#c9d1d9; --accent:#2a78d6; --accent-ink:#1c5cab;
+  --accent-wash:#eaf2fd; --warn-wash:#fdf3e8; --warn-ink:#8a5a20; --warn-line:#e8d3b4;
+  --shadow:0 1px 2px rgba(14,20,25,.05);
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --page:#0a0d10; --surface:#141a1f; --surface-2:#191f25; --surface-3:#202830;
+  --ink:#ffffff; --ink-2:#b4bec6; --muted:#7f8992;
+  --line:#232b33; --line-strong:#333d47; --accent:#3987e5; --accent-ink:#86b6ef;
+  --accent-wash:#15242f; --warn-wash:#2a2115; --warn-ink:#e0b87a; --warn-line:#4a3a20;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{
+  --page:#0a0d10; --surface:#141a1f; --surface-2:#191f25; --surface-3:#202830;
+  --ink:#ffffff; --ink-2:#b4bec6; --muted:#7f8992;
+  --line:#232b33; --line-strong:#333d47; --accent:#3987e5; --accent-ink:#86b6ef;
+  --accent-wash:#15242f; --warn-wash:#2a2115; --warn-ink:#e0b87a; --warn-line:#4a3a20;
+  --shadow:0 1px 2px rgba(0,0,0,.4);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  font-size:15px;line-height:1.62;-webkit-font-smoothing:antialiased}
+.wrap{max-width:760px;margin:0 auto;padding-inline:22px;padding-block:40px 56px}
+.num,code{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
+code{font-size:.88em;background:var(--surface-3);padding:1px 5px;border-radius:3px;color:var(--ink-2)}
+
+header{border-bottom:2px solid var(--ink);padding-bottom:20px;margin-bottom:8px}
+.eyebrow{font-size:11.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--accent-ink);
+  font-weight:600;margin:0 0 9px}
+h1{margin:0 0 12px;font-size:31px;line-height:1.18;font-weight:600;letter-spacing:-.022em;text-wrap:balance}
+.standfirst{margin:0;font-size:16.5px;color:var(--ink-2);text-wrap:pretty}
+.meta{display:flex;flex-wrap:wrap;gap:5px 26px;margin-top:18px;font-size:12.5px;color:var(--muted)}
+.meta b{color:var(--ink-2);font-weight:500}
+
+h2{font-size:19px;font-weight:600;letter-spacing:-.012em;margin:38px 0 12px;text-wrap:balance}
+h2 .n{color:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:15px;
+  font-weight:600;margin-right:9px}
+h3{font-size:14.5px;font-weight:600;margin:24px 0 8px;color:var(--ink)}
+p{margin:0 0 13px;text-wrap:pretty}
+ul{margin:0 0 14px;padding-left:0;list-style:none}
+li{position:relative;padding-left:20px;margin-bottom:8px;text-wrap:pretty}
+li::before{content:"";position:absolute;left:4px;top:.62em;width:5px;height:5px;border-radius:50%;
+  background:var(--accent)}
+li ul{margin:8px 0 0}
+li li::before{background:none;border:1.5px solid var(--line-strong);width:4px;height:4px;top:.6em}
+strong{font-weight:600}
+
+.calc{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 8px 8px 0;padding:16px 18px;margin:16px 0 20px;box-shadow:var(--shadow);
+  overflow-x:auto}
+.calc .cap{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  margin-bottom:11px;font-weight:600}
+.calc table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:340px}
+.calc td{padding:4px 0;vertical-align:baseline}
+.calc td:first-child{color:var(--ink-2);padding-right:18px}
+.calc td:last-child{text-align:right;white-space:nowrap;
+  font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+.calc tr.rule td{border-top:1px solid var(--line-strong);padding-top:9px}
+.calc tr.out td{font-weight:600;color:var(--ink);font-size:15px}
+.calc tr.out td:first-child{font-weight:500;color:var(--ink-2);font-size:13.5px}
+.calc .sub{display:block;font-size:11.5px;color:var(--muted);font-family:"IBM Plex Sans",sans-serif;
+  font-weight:400}
+
+.note{background:var(--accent-wash);border:1px solid var(--line);border-radius:8px;
+  padding:14px 17px;margin:18px 0;font-size:14px}
+.note.warn{background:var(--warn-wash);border-color:var(--warn-line)}
+.note p:last-child,.note ul:last-child,.note li:last-child{margin-bottom:0}
+.note .h{font-weight:600;margin-bottom:6px}
+.note.warn .h{color:var(--warn-ink)}
+
+.tw{overflow-x:auto;margin:16px 0 20px;border:1px solid var(--line);border-radius:8px;
+  background:var(--surface)}
+table.d{width:100%;border-collapse:collapse;font-size:13.5px;min-width:440px}
+table.d th{text-align:right;font-weight:500;color:var(--muted);font-size:11.5px;letter-spacing:.04em;
+  padding:10px 14px;border-bottom:1px solid var(--line-strong);white-space:nowrap}
+table.d th:first-child,table.d td:first-child{text-align:left}
+table.d td{padding:7px 14px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap;
+  font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums}
+table.d td:first-child{font-family:"IBM Plex Sans",sans-serif}
+table.d tr:last-child td{border-bottom:none}
+table.d tbody tr:nth-child(even){background:var(--surface-2)}
+
+footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);
+  font-size:12.5px;color:var(--muted)}
+footer p{margin-bottom:7px}
+@media (max-width:460px){ .wrap{padding-inline:16px;padding-block:28px 40px} h1{font-size:25px} }
+</style>
+<div class="wrap">
+<header>
+  <p class="eyebrow">Melbourne catchment model · Chain 1 first mile</p>
+  <h1>How a postcode gets its share of pickup volume</h1>
+  <p class="standfirst">The model used to give every postcode a site collects from exactly the same volume. It now splits that volume by how often the vans and trucks actually stop there. This is how that percentage is worked out, end to end.</p>
+  <div class="meta">
+    <span><b>Measured over</b> Mon–Fri 18–22 May 2026</span>
+    <span><b>Source</b> CCP booking extract</span>
+    <span><b>Covers</b> {{n_sites}} collection sites, {{n_cells}} postcodes</span>
+  </div>
+</header>
+
+<h2>What changed, in one line</h2>
+<ul>
+  <li><strong>Before:</strong> Melbourne Transport collects from {{mt_cells}} postcodes, so each one was modelled as collecting <span class="num">{{mt_ea}} ÷ {{mt_cells}} = {{mt_equal}}</span> parcels a day — the same number for the CBD fringe as for a single weekly stop in Whittlesea.</li>
+  <li><strong>Now:</strong> each postcode gets the share of the site's volume that matches its share of the site's collection stops.</li>
+  <li><strong>The site total does not move.</strong> Melbourne Transport still collects <span class="num">{{mt_ea}}</span> parcels a day. Only the split between its postcodes changes.</li>
+</ul>
+
+<h2><span class="n">1</span>Start with every stop a route made</h2>
+<ul>
+  <li>The CCP export lists one row per <strong>job</strong> — one vehicle stopping at one address on one day, on a named route.</li>
+  <li>We take one clean working week: <strong>Monday 18 to Friday 22 May 2026</strong>. The extract also holds Saturday, Sunday and a second Monday; including the second Monday would count that weekday twice.</li>
+  <li>That gives <strong>{{all_stops}} collection stops</strong> across the seven sites.</li>
+</ul>
+
+<h2><span class="n">2</span>Keep only the stops that collect from the public</h2>
+<p>Not every stop is a collection, and what counts differs between the two kinds of site. This is deliberate, not an inconsistency:</p>
+<ul>
+  <li><strong>Both kinds of site</strong> keep customer pickups, and keep the places the public lodges — post offices, retail outlets, parcel lockers and street posting boxes. Someone lodging at one of our counters is freight entering the network just as much as a collection from their loading dock.</li>
+  <li><strong>The two transport facilities</strong> (Melbourne Transport, Dandenong Transport) additionally drop their other network stops, because those are at our own buildings: Melbourne Parcel Facility, Dandenong Letters Centre, Tullamarine. The booking instructions say so outright — <em>"Collect all for Mulgrave PDC"</em>, <em>"Collect for Darebin PDC"</em> — they name the building the freight is going to, and {{empties}} of them are collecting empty equipment rather than parcels. That is movement between our own sites, not freight coming in from outside.</li>
+  <li><strong>The five PDC van operations</strong> (Sunshine West, Melbourne North, Bayswater, Oakleigh South, Dandenong South) collect most of that lodgement: post office and retail-outlet stops alone are {{rv_lodge}} of them. The two transports clear a further {{tr_lodge}} on their country runs, at Abbotsford, Romsey, Lancefield, Woodend, Gisborne, Cockatoo and Gembrook.</li>
+  <li><strong>Drop stops at our own buildings</strong> in both cases — a van calling at its own depot or another delivery centre is returning or transferring, not collecting. That removes {{own_stops}} stops.</li>
+  <li><strong>Drop delivery-only bookings.</strong> A stop that only drops parcels off collects nothing.</li>
+</ul>
+
+<h2><span class="n">3</span>Count the stops in each postcode, and divide</h2>
+<p>A postcode's weight is simply its share of its site's collection stops for the week:</p>
+<div class="calc">
+  <div class="cap">Postcode 3029 — Truganina and Tarneit, collected by Melbourne Transport</div>
+  <table>
+    <tr><td>Collection stops in postcode 3029</td><td>{{mt_3029}}</td></tr>
+    <tr><td>Collection stops at Melbourne Transport, all {{mt_cells}} postcodes</td><td>{{mt_base}}</td></tr>
+    <tr class="rule out"><td>Share of the site<span class="sub">{{mt_3029}} ÷ {{mt_base}}</span></td><td>{{mt_3029_pct}}</td></tr>
+  </table>
+</div>
+<ul>
+  <li>Those {{mt_3029}} stops are spread over <strong>{{mt_3029_addr}} separate addresses</strong>, visited on all five days — the warehouse belt out west, not one customer counted repeatedly.</li>
+  <li>Every postcode at a site is worked out the same way, so the shares at each site add up to 100%.</li>
+</ul>
+
+<h2><span class="n">4</span>Multiply by the volume the site collects</h2>
+<p>The site's own volume is unchanged — it comes from the 2025 peak day, scaled by the planning factor the model already uses:</p>
+<div class="calc">
+  <div class="cap">Turning the share into parcels a day</div>
+  <table>
+    <tr><td>Melbourne Transport, 2025 peak day</td><td>{{mt_peak}} EA</td></tr>
+    <tr><td>Planning factor</td><td>× {{factor}}</td></tr>
+    <tr class="rule"><td>Site volume used by the model</td><td>{{mt_ea}} EA/day</td></tr>
+    <tr><td>Postcode 3029's share, from step 3</td><td>× {{mt_3029_pct}}</td></tr>
+    <tr class="rule out"><td>Volume assigned to postcode 3029</td><td>{{mt_3029_ea}} EA/day</td></tr>
+  </table>
+</div>
+<ul>
+  <li>Under the old equal split, 3029 was given <span class="num">{{mt_equal}}</span> parcels a day. It now gets <span class="num">{{mt_3029_ea}}</span> — <strong>{{mt_3029_x}} times more</strong>.</li>
+  <li>That volume comes out of the postcodes that were being over-fed. Postcode 3757, which had four stops all week, drops from <span class="num">{{mt_equal}}</span> to <span class="num">{{mt_3757_ea}}</span>.</li>
+</ul>
+
+<h3>The same calculation at a red-van site</h3>
+<div class="calc">
+  <div class="cap">Postcode 3000 — Melbourne CBD, collected by Sunshine West van operations</div>
+  <table>
+    <tr><td>Collection stops in postcode 3000<span class="sub">{{sw_3000_addr}} addresses — CBD post offices, lockers and posting boxes</span></td><td>{{sw_3000}}</td></tr>
+    <tr><td>Collection stops at Sunshine West, all {{sw_cells}} postcodes</td><td>{{sw_base}}</td></tr>
+    <tr class="rule"><td>Share of the site<span class="sub">{{sw_3000}} ÷ {{sw_base}}</span></td><td>{{sw_3000_pct}}</td></tr>
+    <tr><td>Site volume<span class="sub">{{sw_peak}} peak × {{factor}}</span></td><td>{{sw_ea}} EA/day</td></tr>
+    <tr><td>Postcode 3000's share</td><td>× {{sw_3000_pct}}</td></tr>
+    <tr class="rule out"><td>Volume assigned to postcode 3000<span class="sub">was {{sw_equal}} EA under the equal split</span></td><td>{{sw_3000_ea}} EA/day</td></tr>
+  </table>
+</div>
+
+<h2>How far the split moves</h2>
+<p>Every site is far more concentrated than an equal split assumes:</p>
+<div class="tw"><table class="d">
+  <thead><tr><th>Collection site</th><th>Postcodes</th><th>Equal split gave</th><th>Now ranges</th><th>Top 5 take</th></tr></thead>
+  <tbody>{{site_rows}}</tbody>
+</table></div>
+<ul>
+  <li>All figures are parcels a day (EA). An equal split would give the top five postcodes between 6.7% and 12.5% depending on the site; they actually account for a quarter to a half of everything collected.</li>
+  <li><strong>{{n_halve}} of the {{n_cells}} postcodes more than halve</strong>; {{n_double}} more than double.</li>
+</ul>
+
+<h2>Postcodes we removed, and why</h2>
+<p>{{n_drop_word}} of the {{n_poly}} postcode–site pairs collect nothing from the public and were dropped rather than given a token volume:</p>
+<ul>
+  <li><strong>Eight are delivery-only</strong> — the van goes there, but only ever to drop parcels off. They were in the catchment because the original map was drawn without filtering on booking type.</li>
+  <li><strong>Eight only ever see our own buildings</strong> — the site's only visit to that postcode all week is to another site's dock. Oakleigh South's only stop in 3175 is Dandenong delivery centre; Sunshine West's only stop in 3122 is Hawthorn.</li>
+  <li>No volume is lost when they go. The shares are worked out within each site, so the volume simply moves to that site's remaining postcodes.</li>
+</ul>
+
+<h2>What this deliberately does not change</h2>
+<div class="note">
+  <p class="h">The weights are a shape, not a level.</p>
+  <ul>
+    <li><strong>Total pickup is unchanged</strong> at {{metro_ea}} parcels a day across the seven sites.</li>
+    <li><strong>Every site's own total is unchanged.</strong> All seven still collect exactly what the 2025 peak and the planning factor say they collect.</li>
+    <li><strong>No building's workload changes</strong>, so sorter sizing, work-centre capacity and the facility throughput caps are all untouched — confirmed identical in the rebuilt model.</li>
+    <li>The only thing that moves is how much each postcode contributes, and therefore how many vehicle trips are costed on each collection lane.</li>
+  </ul>
+</div>
+
+<h2>How we know the shares are about right</h2>
+<ul>
+  <li>The booking system records an actual parcel count on some stops — but only at the two transport facilities. The five van sites record none at all, so stop counts are the only signal available there.</li>
+  <li>Where we <em>can</em> check, counting stops predicts the recorded volume closely: a correlation of <strong>{{r_mt}} at Melbourne Transport</strong> and <strong>{{r_dt}} at Dandenong Transport</strong> between a postcode's share of stops and its share of recorded parcels.</li>
+  <li>The recorded parcel counts are far too sparse to use as the volume itself — they total about {{ccp_day}} a day against the model's {{metro_ea}}, under 1%. They can tell us the <em>shape</em> is right; they cannot set the level.</li>
+</ul>
+
+
+<footer>
+  <p>Weights: <code>inputs/melbourne/first_mile_catchment_weights.csv</code> · built by <code>utilities/catchment_visit_weights.py</code> · turned on in the model with the <code>PICKUP_WEIGHTS</code> dial, which defaults to the old equal split.</p>
+  <p>Figures are parcels a day (EA) at the 2025 peak scaled by 0.70, matching the model's existing basis. Stop counts are Monday 18 to Friday 22 May 2026.</p>
+</footer>
+</div>

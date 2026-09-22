@@ -1,0 +1,47 @@
+<div class="wrap">
+<header>
+  <div style="flex:1 1 380px">
+    <h1>Where the vans actually stop</h1>
+    <p class="sub">Chain 1 divides each site's pickup volume <em>equally</em> over its catchment postcodes. These are the measured stop-events instead — one weight per postcode, from the CCP booking extract.</p>
+  </div>
+  <div class="basis">
+    <span><b>Basis</b> Mon–Fri 18–22 May 2026</span>
+    <span><b>Weight</b> stop-events</span>
+    <span><b>Cells</b> <span class="num">{{n_cells}}</span> weighted, <span class="num">{{n_dropped}}</span> dropped</span>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="ctl"><label id="l-site">Collection site</label>
+    <div class="chips" id="sites" role="group" aria-labelledby="l-site"></div></div>
+  <div class="ctl"><label id="l-mode">Colour by</label>
+    <div class="chips" id="modes" role="group" aria-labelledby="l-mode">
+      <button class="chip" type="button" data-mode="share" aria-pressed="true">Share of site volume</button>
+      <button class="chip" type="button" data-mode="delta" aria-pressed="false">Change vs equal split</button>
+    </div></div>
+  <label class="toggle"><input type="checkbox" id="showdrop"> Show the {{n_dropped}} dropped cells</label>
+</div>
+
+<dl class="stats" id="stats"></dl>
+
+<div class="main">
+  <section class="panel">
+    <div class="panel-hd"><h2 id="maptitle">Catchment</h2><span class="note" id="mapnote"></span></div>
+    <div class="mapbox"><div id="mapholder"></div></div>
+    <div class="legend" id="legend"></div>
+  </section>
+  <section class="panel">
+    <div class="panel-hd"><h2 id="tbltitle">Postcodes by weight</h2><span class="note" id="tblnote"></span></div>
+    <div class="tblwrap"><table>
+      <thead><tr><th scope="col">Postcode</th><th scope="col">Stops</th><th scope="col">Addr</th>
+        <th scope="col">Share</th><th scope="col">EA now</th><th scope="col">vs equal</th></tr></thead>
+      <tbody id="tbody"></tbody></table></div>
+  </section>
+</div>
+
+<footer>
+  Weights are <b>shape only</b>. CCP records 4,130&nbsp;EA/day against the model's 452,634 — 0.9% — so the level stays with <code>PEAK_2025_* × PEAK_FACTOR</code> and only the within-site split moves. Site totals are unchanged.
+  <br><br>Source: <code>utilities/catchment_visit_weights.py</code>.
+</footer>
+</div>
+<div id="tip" role="status" aria-live="polite"></div>
