@@ -79,7 +79,7 @@ def rings(geom):
     return out
 
 
-def build_payload(poly, rep, sites, fac2):
+def build_payload(poly, rep, sites, fac2, col):
     shapes = poly.groupby("post_code").geometry.nunique()
     assert (shapes == 1).all(), (
         "a postcode has more than one geometry, so one-per-postcode is not safe: "
@@ -99,7 +99,13 @@ def build_payload(poly, rep, sites, fac2):
                               vc=float(d.vol_coll), w=float(d.weight), eq=float(d.share_equal),
                               ea=float(d.weighted_EA), eea=float(d.equal_EA), drop=0))
         else:
-            cells.append(dict(f=r.facility_name, p=int(r.post_code), drop=1, why="collects nothing"))
+            # two different reasons a cell collects nothing, and the page names which: it never
+            # took a collection booking at all, or every stop it did take was at one of our own
+            # buildings. `col` keeps own-building rows (flagged), so seeing any row here means
+            # the second.
+            seen = col[(col.facility == r.facility_name) & (col.post_code == int(r.post_code))]
+            cells.append(dict(f=r.facility_name, p=int(r.post_code), drop=1,
+                              why=("only our own buildings" if len(seen) else "no collection booking")))
 
     site = {}
     for r in sites[sites.van_arm.notna()].itertuples():
@@ -116,9 +122,16 @@ def build_payload(poly, rep, sites, fac2):
                       separators=(",", ":"), allow_nan=False)
 
 
-def write_map(payload, rep, poly):
+def site_ea_total(rep):
+    return rep.groupby("facility_name").site_EA.first().sum()
+
+
+def write_map(payload, rep, poly, col, metro):
     body = (TPL / "map_body.html").read_text()
-    for k, val in {"n_cells": f"{len(rep):,}", "n_dropped": len(poly) - len(rep)}.items():
+    ccp = col["Volumes Collected"].sum() / 5
+    for k, val in {"n_cells": f"{len(rep):,}", "n_dropped": len(poly) - len(rep),
+                   "ccp_day": f"{round(ccp):,}", "metro_ea": f"{round(metro):,}",
+                   "ccp_pct": f"{100 * ccp / metro:.1f}%"}.items():
         body = body.replace("{{" + k + "}}", str(val))
     left = re.findall(r"\{\{(\w+)\}\}", body)
     assert not left, f"the map body has placeholders nothing filled: {sorted(set(left))}"
@@ -199,7 +212,7 @@ def main():
     col = cvw.collection_slice(cvw.load_ccp())
     print(f"{len(rep)} weighted cells over {rep.facility_name.nunique()} sites, "
           f"{len(poly)} polygons, peak factor {factor}")
-    write_map(build_payload(poly, rep, sites, fac2), rep, poly)
+    write_map(build_payload(poly, rep, sites, fac2, col), rep, poly, col, site_ea_total(rep))
     write_pct(rep, peak, factor, col, sites)
 
 
