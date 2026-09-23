@@ -55,27 +55,9 @@ def vehicle_by_site():
 
 
 def collection_stops():
-    """The stops that count as a collection, on the same rule the weights use."""
+    """The stops that count as a collection, on the same rule the weights use — imported, so
+    the extract and the weights can never drift into two different definitions."""
     col = cvw.collection_slice(cvw.load_ccp())
-    if not hasattr(cvw, "LODGE"):
-        # This checkout predates the rule that lets the transports count lodgement points
-        # (post offices, lockers, posting boxes) as well as customer pickups — it lives on the
-        # pickup-catchment-weights branch. Applying it here keeps this extract consistent with
-        # the weights file on disk. DELETE this block once the branches are merged; it is a
-        # second copy of a rule that should have exactly one.
-        print("  NOTE: this branch has no cvw.LODGE — applying the transport lodgement rule here")
-        w = cvw.load_ccp()
-        wk = w[w.day.astype(str).between(*cvw.WINDOW)].copy()
-        name = wk.loc_name.astype(str).str.upper()
-        own = wk.loc_type.eq("Network") & name.str.contains(cvw.OWN, regex=True, na=False)
-        lodge = wk.loc_type.eq("Network") & name.str.contains(
-            r"\bLPO\b|POST OFFICE|POSTSHOP|\bRP\b|LOCKER|POST BOX|POSTING BOX|\bSPB\b",
-            regex=True, na=False)
-        extra = wk[wk.facility.isin(cvw.TRANSPORTS) & wk.booking_type.isin(cvw.COLLECTING)
-                   & lodge & ~own].copy()
-        extra["own"] = False
-        col = pd.concat([col, extra], ignore_index=True)
-        print(f"        +{len(extra)} transport lodgement stops")
     return col[~col.own].copy()
 
 
