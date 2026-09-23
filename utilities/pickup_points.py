@@ -40,6 +40,14 @@ FAC2 = ROOT / "outputs/melbourne_optilogic_chain2_observed/Facilities.csv"
 OUT = ROOT / "outputs/pickup_points.csv"          # --day writes a dated sibling
 OUT_STOPS = ROOT / "outputs/pickup_stops.csv"     # --per-stop, one row per collection
 
+# What --per-stop calls each vehicle. A RELABEL for the downstream tool, not a model change:
+# the model's modes stay Red_Van and Truck in first_mile_pickup.csv and transport_modes.csv,
+# and pickup_points.csv still carries those. Note white_van is itself a mode name in
+# transport_modes.csv with quite different numbers (160 EA at $1.1/km, against Truck's 1,500 at
+# $0.9), so anything joining this column back to the model by name will pick up the wrong
+# vehicle — map through this dict rather than treating the label as the mode.
+VEHICLE_LABEL = {"Red_Van": "red_van", "Truck": "white_van"}
+
 # a generous Victoria box — it is a sanity flag on the geocoder, not a catchment test
 VIC = dict(lat=(-39.2, -33.9), lon=(140.9, 150.1))
 
@@ -72,12 +80,16 @@ def warehouse_xy():
 
 
 def write_per_stop(col, geo, day, veh):
+    # fail here, not silently, if a site ever collects on a mode with no label
+
     """One row per COLLECTION, not per address — an address called at three times is three rows.
 
     The shape a routing tool wants: where the vehicle comes from, where it goes, how much it
     lifts. Total Articles is 1 on every row: CCP records no per-stop article count for pickups
     (its Measure Values are zero on every Pickup booking), so a stop is one unit of demand and
     the volume, if it is ever needed, has to come from somewhere else."""
+    unknown = sorted(set(veh.values()) - set(VEHICLE_LABEL))
+    assert not unknown, f"no Vehicle_Type label for mode(s) {unknown} — add them to VEHICLE_LABEL"
     wh = warehouse_xy()
     d = col.merge(geo, left_on="addr", right_on="Location Address", how="left")
     assert len(d) == len(col), "the geocode join duplicated rows"
@@ -90,8 +102,7 @@ def write_per_stop(col, geo, day, veh):
         d = d[~bad]
     out = pd.DataFrame({
         "Facility Name": d.facility.values,
-        # the model's own mode names, so this column joins to transport_modes.csv
-        "Vehicle_Type": [veh[f] for f in d.facility],
+        "Vehicle_Type": [VEHICLE_LABEL[veh[f]] for f in d.facility],
         "Warehouse Latitude": [wh[f][0] for f in d.facility],
         "Warehouse Longitude": [wh[f][1] for f in d.facility],
         "Total Articles": 1,
