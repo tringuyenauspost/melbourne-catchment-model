@@ -22,6 +22,7 @@ them.
     python plotting/pickup_points_map.py
 """
 
+import argparse
 import json
 from pathlib import Path
 
@@ -29,7 +30,7 @@ import pandas as pd
 import shapely
 
 ROOT = Path(__file__).resolve().parents[1]
-POINTS = ROOT / "outputs/pickup_points.csv"
+POINTS = ROOT / "outputs/pickup_points.csv"      # --day reads/writes the dated siblings
 POLY = ROOT / "inputs/melbourne/first_mile_catchment_polygons.csv"
 OUT = ROOT / "outputs/pickup-points-map.html"
 SIMPLIFY, SCALE = 0.0002, 10000
@@ -142,10 +143,10 @@ BODY = """<div class="wrap">
 <header>
   <div style="flex:1 1 420px">
     <h1>Where we collect</h1>
-    <p class="sub">Every address the network picked up from in one Mon&ndash;Fri week, over the postcode boundaries that make up the catchments. Point size is how many times it was visited.</p>
+    <p class="sub">Every address the network picked up from, over the postcode boundaries that make up the catchments. Point size is how many times it was visited &mdash; repeat calls at one address count separately.</p>
   </div>
   <div class="basis">
-    <span><b>Week</b> 18&ndash;22 May 2026</span>
+    <span><b>{{period_label}}</b> {{period}}</span>
     <span><b>Points</b> <span class="num">{{n_points}}</span></span>
     <span><b>Stops</b> <span class="num">{{n_stops}}</span></span>
   </div>
@@ -319,12 +320,17 @@ function drawStats() {
   const list = site === "ALL" ? D.points : byNode[site];
   const stops = list.reduce((a, p) => a + p.s, 0);
   const daily = list.filter(p => p.d === 5).length;
+  const repeat = list.filter(p => p.s > 1).length;
   const tile = (k, v, s) => `<div class="stat"><dt>${k}</dt><dd class="num">${v}<small> ${s}</small></dd></div>`;
   $("stats").innerHTML =
     tile("Pickup points", fmt(list.length), site === "ALL" ? "addresses" : "at this site")
-    + tile("Stops", fmt(stops), "in the week")
+    + tile("Stops", fmt(stops), D.single ? "that day" : "in the week")
     + tile("Postcodes", new Set(list.map(p => p.p)).size, "touched")
-    + tile("Every weekday", fmt(daily), `${(100 * daily / list.length).toFixed(0)}% of points`)
+    // "seen every weekday" is meaningless on a one-day extract, where it is always zero;
+    // the useful single-day figure is how many addresses took more than one call
+    + (D.single
+       ? tile("Called twice+", fmt(repeat), `${(100 * repeat / list.length).toFixed(0)}% of points`)
+       : tile("Every weekday", fmt(daily), `${(100 * daily / list.length).toFixed(0)}% of points`))
     + tile("Busiest", fmt(Math.max(...list.map(p => p.s))), "stops at one address");
 }
 
@@ -334,7 +340,7 @@ function drawLegend() {
     <span class="key"><i style="background:${css("--truck")}"></i>Truck — the two transport facilities</span>
     <span class="key sizes">${[1, 10, 40].map(s =>
       `<i style="width:${2 * radius(s)}px;height:${2 * radius(s)}px"></i>`).join("")}
-      <span style="margin-left:3px">1 · 10 · 40 stops a week</span></span>`;
+      <span style="margin-left:3px">1 · 10 · 40 {{unit}}</span></span>`;
   if (site !== "ALL" && showOthers)
     L.innerHTML += `<span class="key"><i style="background:${css("--other")};opacity:.5"></i>other sites</span>`;
 }
@@ -375,8 +381,11 @@ def rings(geom):
     return out
 
 
-def main():
-    pts = pd.read_csv(POINTS)
+def main(day=None):
+    src = POINTS if not day else POINTS.with_name(f"{POINTS.stem}_{day}{POINTS.suffix}")
+    out = OUT if not day else OUT.with_name(f"{OUT.stem}-{day}{OUT.suffix}")
+    assert src.exists(), f"{src.name} is not built — run: python utilities/pickup_points.py --day {day}"
+    pts = pd.read_csv(src)
     n_bad = int((~pts.in_victoria).sum())
     pts = pts[pts.in_victoria].copy()          # a bad geocode would blow the projection open
     poly = pd.read_csv(POLY)
@@ -391,22 +400,31 @@ def main():
               for r in pts.itertuples()]
     sites = [dict(name=s, vehicle=t.vehicle_type.iloc[0])
              for s, t in pts.groupby("facility_name")]
-    payload = json.dumps(dict(scale=SCALE, geo=geo, points=points, sites=sites),
+    payload = json.dumps(dict(scale=SCALE, geo=geo, points=points, sites=sites,
+                              single=bool(day)),
                          separators=(",", ":"), allow_nan=False)
 
-    body = BODY
-    for k, v in {"n_points": f"{len(pts):,}", "n_stops": f"{pts.stops.sum():,}",
-                 "n_bad": n_bad, "n_nopoly": n_nopoly}.items():
+    fill = {"n_points": f"{len(pts):,}", "n_stops": f"{pts.stops.sum():,}",
+                 "n_bad": n_bad, "n_nopoly": n_nopoly,
+                 "period": (day if day else "18&ndash;22 May 2026"),
+                 "period_label": ("Day" if day else "Week"),
+                 "unit": ("stops that day" if day else "stops a week")}
+    body, app = BODY, APP
+    for k, v in fill.items():
         body = body.replace("{{" + k + "}}", str(v))
-    assert "{{" not in body, "a placeholder was left unfilled"
+        app = app.replace("{{" + k + "}}", str(v))
+    for name, txt in (("body", body), ("app", app)):
+        assert "{{" not in txt, f"a placeholder was left unfilled in {name}"
     page = (SHELL + HEAD + "\n</head>\n<body>\n" + body
             + '<script type="application/json" id="ptdata">' + payload + "</script>\n"
-            + APP + "\n</body>\n</html>\n")
-    OUT.write_text(page)
+            + app + "\n</body>\n</html>\n")
+    out.write_text(page)
     print(f"{len(pts):,} points, {pts.stops.sum():,} stops, {len(geo)} postcode polygons")
     print(f"  {n_bad} excluded on a bad geocode · {n_nopoly} in postcodes with no polygon")
-    print(f"wrote {OUT.relative_to(ROOT)}  {OUT.stat().st_size / 1e6:.2f} MB")
+    print(f"wrote {out.relative_to(ROOT)}  {out.stat().st_size / 1e6:.2f} MB")
 
 
 if __name__ == "__main__":
-    main()
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--day", help="a single date, YYYY-MM-DD; reads the dated points CSV")
+    main(ap.parse_args().day)
