@@ -36,7 +36,9 @@ GEOCODE = ROOT / "inputs/red_vans_inputs/geocoding_result.csv"
 PICKUP = ROOT / "inputs/factors_assumed/first_mile_pickup.csv"
 DIALS = ROOT / "inputs/factors_assumed/dials_chain1.csv"
 SITES = ROOT / "inputs/factors_assumed/sites.csv"
+FAC2 = ROOT / "outputs/melbourne_optilogic_chain2_observed/Facilities.csv"
 OUT = ROOT / "outputs/pickup_points.csv"          # --day writes a dated sibling
+OUT_STOPS = ROOT / "outputs/pickup_stops.csv"     # --per-stop, one row per collection
 
 # a generous Victoria box — it is a sanity flag on the geocoder, not a catchment test
 VIC = dict(lat=(-39.2, -33.9), lon=(140.9, 150.1))
@@ -52,6 +54,57 @@ def vehicle_by_site():
     print(f"  vehicle from first_mile_pickup.csv, default {default}:")
     for mode in sorted(set(out.values())):
         print(f"    {mode:10s} {', '.join(sorted(s for s, m in out.items() if m == mode))}")
+    return out
+
+
+def warehouse_xy():
+    """Each collecting site's own coordinate — the WAREHOUSE end of a pickup leg.
+
+    From chain 2's Facilities.csv, which is where s2b takes its lane distances from. NOT from
+    sites.csv: its lat/long are blank for both transport facilities."""
+    sites = pd.read_csv(SITES)
+    fac = pd.read_csv(FAC2).set_index("facilityname")
+    out = {}
+    for r in sites[sites.van_arm.notna()].itertuples():
+        assert r.node in fac.index, f"chain 2 has no facility row for {r.node}"
+        out[r.van_arm] = (float(fac.loc[r.node, "latitude"]), float(fac.loc[r.node, "longitude"]))
+    return out
+
+
+def write_per_stop(col, geo, day, veh):
+    """One row per COLLECTION, not per address — an address called at three times is three rows.
+
+    The shape a routing tool wants: where the vehicle comes from, where it goes, how much it
+    lifts. Total Articles is 1 on every row: CCP records no per-stop article count for pickups
+    (its Measure Values are zero on every Pickup booking), so a stop is one unit of demand and
+    the volume, if it is ever needed, has to come from somewhere else."""
+    wh = warehouse_xy()
+    d = col.merge(geo, left_on="addr", right_on="Location Address", how="left")
+    assert len(d) == len(col), "the geocode join duplicated rows"
+    assert d.google_latitude.notna().all(), (
+        f"{int(d.google_latitude.isna().sum())} stops have no geocode")
+    bad = ~(d.google_latitude.between(*VIC["lat"]) & d.google_longitude.between(*VIC["lon"]))
+    if bad.any():
+        print(f"  dropping {int(bad.sum())} stop(s) on a geocode outside Victoria — "
+              "a bad coordinate is worse than a missing row for a routing input")
+        d = d[~bad]
+    out = pd.DataFrame({
+        "Facility Name": d.facility.values,
+        # the model's own mode names, so this column joins to transport_modes.csv
+        "Vehicle_Type": [veh[f] for f in d.facility],
+        "Warehouse Latitude": [wh[f][0] for f in d.facility],
+        "Warehouse Longitude": [wh[f][1] for f in d.facility],
+        "Total Articles": 1,
+        "Delivery Latitude": d.google_latitude.values,
+        "Delivery Longitude": d.google_longitude.values})
+    path = OUT_STOPS if not day else OUT_STOPS.with_name(f"{OUT_STOPS.stem}_{day}{OUT_STOPS.suffix}")
+    out.to_csv(path, index=False)
+    print(f"\n  {len(out):,} rows — one per collection stop")
+    print(out.groupby(["Vehicle_Type", "Facility Name"]).agg(
+        stops=("Total Articles", "size"),
+        warehouse_lat=("Warehouse Latitude", lambda s: f"{s.iloc[0]:.4f}"),
+        warehouse_lon=("Warehouse Longitude", lambda s: f"{s.iloc[0]:.4f}")).to_string())
+    print(f"\nwrote {path.relative_to(ROOT)}")
     return out
 
 
@@ -71,7 +124,7 @@ def collection_stops(day=None):
     return col
 
 
-def main(day=None):
+def main(day=None, per_stop=False):
     out = (OUT if not day else OUT.with_name(f"{OUT.stem}_{day}{OUT.suffix}"))
     print(f"building the pickup-point extract{' for ' + day if day else ''}")
     veh = vehicle_by_site()
@@ -80,6 +133,8 @@ def main(day=None):
     geo = (pd.read_csv(GEOCODE, usecols=["Location Address", "google_latitude",
                                          "google_longitude", "suburb"])
              .drop_duplicates("Location Address"))
+    if per_stop:
+        return write_per_stop(col, geo, day, veh)
     pts = col.groupby(["facility", "addr"], as_index=False).agg(
         location_name=("loc_name", "first"), location_type=("loc_type", "first"),
         post_code=("post_code", "first"), stops=("addr", "size"),
@@ -128,4 +183,8 @@ def main(day=None):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--day", help="a single date, YYYY-MM-DD, instead of the whole Mon-Fri week")
-    main(ap.parse_args().day)
+    ap.add_argument("--per-stop", action="store_true",
+                    help="one row per collection instead of per address, as warehouse -> "
+                         "delivery pairs for a routing tool")
+    a = ap.parse_args()
+    main(a.day, a.per_stop)
