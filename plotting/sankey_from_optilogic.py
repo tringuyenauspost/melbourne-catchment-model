@@ -108,7 +108,8 @@ def _model_col(table, column):
     return [r[column] for r in csv.DictReader(open(path, encoding="utf-8-sig"))]
 
 
-# The origin clusters, from the run's own pickup suppliers (`SUP_PKP_<cluster>_<postcode>`).
+# The origin clusters, from the run's own pickup suppliers (`SUP_PKP_<cluster>_<cell>`, where
+# the cell is a postcode on the catchment basis and a `C<n>` round number on the cluster one).
 # LONGEST FIRST, and that is load-bearing: the regex below is an alternation, so DANDENONG would
 # shadow DANDENONG_TR and quietly fold the two catchments into one if the order were alphabetical.
 # The last segment is NOT required to be a postcode: chain 1 gained a REGIONAL origin
