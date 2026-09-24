@@ -182,6 +182,13 @@ def main(day=None, per_stop=False):
     print(pts.groupby(["vehicle_type", "facility_name"]).agg(
         points=("address", "size"), stops=("stops", "sum"),
         postcodes=("post_code", "nunique")).to_string())
+    print("\n  stops by date:")
+    by_day = (col.assign(vehicle_type=col.facility.map(veh), day=col.day.astype(str))
+                 .pivot_table(index=["vehicle_type", "facility"], columns="day",
+                              values="addr", aggfunc="size", fill_value=0))
+    by_day["total"] = by_day.sum(axis=1)
+    by_day.loc[("", "all sites"), :] = by_day.sum()
+    print(by_day.astype(int).to_string())
     bad = pts[~pts.in_victoria]
     if len(bad):
         print("\n  flagged in_victoria=False:")
