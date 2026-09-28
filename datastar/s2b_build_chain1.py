@@ -1,6 +1,6 @@
 """Step 3 of the build — chain 1, the COLLECTION entity.
 
-    IN    inputs/factors_assumed/          dials_chain1 + dials, machine_rates, site_sorters,
+    IN    inputs/factors_assumed/          dials_chain1 + dials, machine_rates, site_machines,
                                           operating_hours, transport_modes, sites,
                                           first_mile_despatch
           inputs/melbourne/<polygons.csv> the 411 catchment polygons, as WKT
@@ -44,6 +44,7 @@ import shapely
 
 import _report                    # the phase report card — see _report.py
 from _log import get_logger      # every message in the build goes through here
+from _facilities import Machines
 from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, FASS, INPUTS, RAW
 
 log = get_logger(__file__)
@@ -252,12 +253,11 @@ def generate():
     DOCK_HEAD = float(_dl.loc["HUB_DOCK_BUFFER", "value"])
     FAC_HEAD  = float(_dl.loc["FACILITY_BUFFER", "value"])
     HOURS = dict(zip(*pd.read_csv(FASS / "operating_hours.csv")[["kind", "hours_per_day"]].T.values))
-    MACH  = pd.read_csv(FASS / "machine_rates.csv").set_index("machine")
-    SORTERS = {}
-    for r in pd.read_csv(FASS / "site_sorters.csv").itertuples():
-        SORTERS.setdefault(r.site, {})[r.machine] = r.rate_hr
+    # what each building runs and at what rate/cost — sites.csv + site_machines.csv
+    MACH = Machines(FASS)
+    SORTERS = {s: dict(v) for s, v in MACH.sorters.items()}
     for h in HUBS:
-        SORTERS.setdefault(h, {})["SORT_MANUAL"] = int(MACH.loc["SORT_MANUAL", "rate_hr"])
+        SORTERS.setdefault(h, {})["SORT_MANUAL"] = MACH.rate(h, "SORT_MANUAL")
     MODES = pd.read_csv(FASS / "transport_modes.csv")
     LINEHAUL = MODES[MODES.linehaul == 1]
     # ── what each site collects ON ────────────────────────────────────────────────────
@@ -303,7 +303,7 @@ def generate():
             f"first_mile_despatch.csv: {short(p_)} {c} shares sum to {sum(d.values())}, not 1.0")
     for h in SORT1:
         assert h in SORTERS and any(m != "SORT_MANUAL" for m in SORTERS[h]), (
-            f"{short(h)} is a round-1 despatch destination but site_sorters.csv gives it no "
+            f"{short(h)} is a round-1 despatch destination but site_machines.csv gives it no "
             f"sorter — a building cannot receive a linehaul it cannot sort")
         assert h in CODE, (
             f"{short(h)} is a round-1 despatch destination but has no code in sites.csv — the "
@@ -523,7 +523,7 @@ def generate():
     for p in SORT0:
         machines[p] = ["BAG_UNLOAD"] + machines.get(p, sorted(SORTERS[p]))
     def rate(site, m):
-        return SORTERS.get(site, {}).get(m) or int(MACH.loc[m, "rate_hr"])
+        return SORTERS.get(site, {}).get(m) or MACH.rate(site, m)
     def kind(m):
         """Which operating window the machine runs in — BAG_UNLOAD is an unload shift."""
         return "UNLOAD" if "UNLOAD" in m else "LOAD" if "LOAD" in m else "SORT"
@@ -816,13 +816,13 @@ def generate():
                 wc.append({"workcentername": f"WC_{m}_{sh}", "facilityname": site,
                     "status": "Include", "workcenterstatus": "Open", "initialstate": "Existing",
                     "throughputcapacity": cap_m, "throughputcapacityuom": "EA",
-                    "fixedoperatingcost": round(int(MACH.loc[m, "fixed_yr"]) / WORKING_DAYS),
+                    "fixedoperatingcost": round(MACH.fixed_yr(site, m) / WORKING_DAYS),
                     "notes": f"{m} at {sh}: {rate(site, m) * scale:,.1f}/hr x "
                              f"{HOURS[kind(m)]}h per period"})
                 procs.append({"processname": f"{sh}_{m}", "stepname": m, "stepnumber": 1,
                     "status": "Include", "workcentername": f"WC_{m}_{sh}",
                     "processingrate": cap_m, "ratequantityuom": "EA", "ratetimeuom": "DAY",
-                    "unitcost": float(MACH.loc[m, "unit_cost"]), "unitcostuom": "EA",
+                    "unitcost": MACH.unit_cost(site, m), "unitcostuom": "EA",
                     "notes": f"{m} at {sh}"})
     T["WorkCenters"] = frame("WorkCenters", wc)
     # Publish the SORT load so the combiner can size a shared sorter ONCE. A dock can be added to;

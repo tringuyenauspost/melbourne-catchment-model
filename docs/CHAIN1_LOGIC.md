@@ -132,6 +132,12 @@ Mon–Fri mean. Monday 18 May runs more routes (red vans 447, trucks 174), so vo
   - Red vans do 15–25 pickups per route, not 12.
   - Trucks do about 3.4 customer pickups per route, not 8.
   - Stops ÷ 12 (red van) and ÷ 8 (truck) therefore gives about 2× too many red vans and 2.4× too few trucks.
+- **One number per vehicle type: red van 19 stops, truck 3.4 stops.**
+  - It is the **mean** over every route on every day, Mon–Fri: total stops ÷ total route-days. Red van 18.7 over 2,092 route-days; truck 3.4 over 866.
+  - Use the mean, not the median (red van 17, truck 3). Fleet = stops ÷ stops-per-vehicle only gives back the measured route count when the divisor is the mean, because the long routes carry a large share of the stops. The median over-counts the fleet.
+  - Check: 7,821 ÷ 19 = 412 red vans against 418 measured; 584 ÷ 3.4 = 172 trucks against 173 measured.
+  - If a whole number is required for trucks, use 3. It over-counts by about 12% (195 trucks), the conservative side for sizing.
+  - It hides the site spread: red-van sites range from 15.4 (Sunshine West) to 22.9 (Dandenong South) stops per route. One number over-sizes Dandenong South and Oakleigh South by about 20% and under-sizes Sunshine West by about 20%. The two trucks agree (3.3 and 3.4).
 - **Red-van sites are fairly even:** 367–510 EA per vehicle.
   - Sunshine West runs many short routes with big stops (15.4 stops, 32.5 EA each).
   - Dandenong South runs fewer, longer routes with smaller stops (22.9 stops, 22.3 EA each).

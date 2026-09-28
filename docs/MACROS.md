@@ -5,7 +5,7 @@ Project `Temp_FY26_Melbourne`. Four macros run in order: **2 → 3 → 4 → 5**
 **Rules for every macro**
 - Each script task has a **`Wip_C0<n>_Drop<step>`** SQL task directly before it, created by `setup_macro_drop_task.py <macro_n>`. To re-run a step, start at its Drop task, or the old rows stay.
 - The build scripts (`s2a`, `s2b`, `s2c`, `s3a–c`) are **verbatim copies** of `pipeline/`. Edit `pipeline/`, then re-copy. `_paths.py` is the only fork.
-- Every macro needs these files in the same folder: `_paths.py`, `_log.py`, `_report.py`, `table_bridge.py`.
+- Every macro needs these files in the same folder: `_paths.py`, `_log.py`, `_report.py`, `table_bridge.py`. Macros 3–5 also need `_facilities.py` (reads `sites.csv` + `site_machines.csv`).
 - Tables move as **text**, so each published table is byte-identical to the local build's CSV.
 
 ---
@@ -72,7 +72,7 @@ Project `Temp_FY26_Melbourne`. Four macros run in order: **2 → 3 → 4 → 5**
 
 **Inputs**
 - From Macro 2: `Wip_C02_Obs*`, `Wip_C02_Provenance`, `Wip_C02_ConsignmentPaths`
-- `factors_assumed/`: `dials.csv`, `sites.csv`, `site_sorters`, `machine_rates`, `operating_hours`, `period_split`, `unload_mix`, `origin_clusters`, `pud_capacity`, `transport_modes`
+- `factors_assumed/`: `dials.csv`, `sites.csv`, `site_machines`, `machine_rates`, `operating_hours`, `period_split`, `unload_mix`, `origin_clusters`, `transport_modes`
 - `melbourne/`: `temp_clustered.csv`, `cluster_summary.csv`, `first_mile_catchment_polygons.csv`
 
 **Outputs** (20 tables, `Wip_C03_*`)
@@ -105,19 +105,19 @@ Project `Temp_FY26_Melbourne`. Four macros run in order: **2 → 3 → 4 → 5**
 - **Terminate (sinks):** read from chain 2's `SupplierCapabilities`, so chain 1 never hands volume to a building where chain 2 has no supplier.
   - PDO terminate is carved out of the interstate sink at the same hub (`PDO_TERMINATE_FACTOR` = 1.10).
 - **Lanes** use the haversine distance between cell and facility.
-- **Capacity:** `machine_rates` × `operating_hours`. Sort load is published so Macro 5 sizes shared sorters once.
+- **Capacity:** `machine_rates` × `operating_hours`, with any rate or cost `site_machines.csv` localises at one site. Sort load is published so Macro 5 sizes shared sorters once.
 
 **Inputs**
 - From Macro 3: all 20 `Wip_C03_*` tables. `Facilities`, `SupplierCapabilities` and `TransportationModes` are the ones read.
-- `factors_assumed/`: `dials_chain1.csv`, `dials.csv`, `sites.csv`, `machine_rates`, `site_sorters`, `operating_hours`, `transport_modes`, `first_mile_pickup.csv`, `first_mile_despatch.csv`
-- `melbourne/first_mile_catchment_polygons.csv`
+- `factors_assumed/`: `dials_chain1.csv`, `dials.csv`, `sites.csv`, `machine_rates`, `site_machines`, `operating_hours`, `transport_modes`, `first_mile_pickup.csv`, `first_mile_despatch.csv`
+- `melbourne/first_mile_catchment_polygons.csv` (only when `PICKUP_CLUSTERS` = none)
 - `pick_up_cluster/`: `cluster_summary.csv`, `temp_clustered.csv`
 
 **Outputs** (17 tables, `Wip_C04_*`)
 - The same Anura tables as chain 2, minus `OriginMix`, `UserDefinedVariables` and `UserDefinedConstraints`.
 
 **Pending (measured from CCP bookings, not yet in the build)**
-- Pickup stops: 42,022 a week (`utilities/pickup_points.py`). The route clusters predate the 2026-09-24 delivery-centre rule and need a re-run.
+- Pickup stops: 42,022 a week (`utilities/pickup_points.py`). The route clusters were re-run 2026-09-29 (`pickup_new_version_2`: 663 rounds, 9,378 stops).
 - Transport despatch from next-drop stop counts disagrees with `first_mile_despatch.csv`.
   - Dandenong Transport sends ~0% to MPF against the assumed 80%.
   - This needs ops confirmation before the CSV changes.

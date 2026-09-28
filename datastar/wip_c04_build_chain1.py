@@ -10,7 +10,8 @@ would hand volume to buildings chain 2 has no supplier at. So macro 3 must have 
 Every chain-2 table is brought back, not just the three read today: which ones s2b reads is
 s2b's business, and a copy that silently needed a fourth file would fail here instead.
 
-NEEDS BESIDE IT: s2b_build_chain1.py, _paths.py, _log.py, _report.py, table_bridge.py.
+NEEDS BESIDE IT: s2b_build_chain1.py, _paths.py, _log.py, _report.py, _facilities.py,
+table_bridge.py.
 """
 
 import logging

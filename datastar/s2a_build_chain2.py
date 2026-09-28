@@ -88,6 +88,7 @@ log.info(f"REPO: {REPO}")
 #   inputs/factors_observed/   written by s1a_export_chain2_factors.py from the scan reduction —
 #                              never hand-edit; re-run the exporter after a re-extract
 from _paths import FASS, FOBS
+from _facilities import Machines, ops_capacity
 for _p, _fix in ((FASS, "restore inputs/factors_assumed (hand-managed)"),
                  (FOBS, "run: uv run python s1a_export_chain2_factors.py")):
     assert _p.exists(), f"missing {_p} — {_fix}"
@@ -497,13 +498,14 @@ def origin_tag(pud):
     c = CLUSTER_OF_PUD[pud]
     return {"none": "LOCAL", "region": REGION_OF_CLUSTER[c], "cluster": c}.get(ORIGIN_TAG_LEVEL, c)
 
-SITE_SORTERS = {}
-for _r in pd.read_csv(FASS / "site_sorters.csv").itertuples():
-    SITE_SORTERS.setdefault(_r.site, {})[_r.machine] = int(_r.rate_hr)
+# what each building runs and at what rate/cost — sites.csv + site_machines.csv, see _facilities.py
+MACHINES = Machines(FASS)
+SITE_SORTERS = {s: dict(v) for s, v in MACHINES.sorters.items()}
 SORT_PUD_SET  = {s for s in SITE_SORTERS if s in PUD_SET}
 STAGE_PUD_SET = SORT_PUD_SET & DELIVERY_PUD_SET
-PUD_CAPACITY = {_r.pud: int(_r.capacity_ea)
-                for _r in pd.read_csv(FASS / "pud_capacity.csv").itertuples()}
+PUD_CAPACITY = ops_capacity(FASS)
+for _s, _m, _f, _d, _v in MACHINES.localised():
+    log.info(f"  site_machines.csv: {_m} at {_s} runs {_f} = {_v:g} (catalogue {_d:g})")
 # LOCAL_KEEP / LOCAL_SHARE: chain-1 dials, moved to the chain-1 notebook.
 FACILITY_BUFFER = dial("FACILITY_BUFFER")
 
@@ -544,7 +546,7 @@ DLC_MAX_ROUND2_SHARE = dial("DLC_MAX_ROUND2_SHARE")   # Max round-2 divert share
 # coordinates it carried are columns there like every other building's.
 SITE_SORTERS_MISSING = SORT_ONLY_PUDS - set(SITE_SORTERS)
 assert not SITE_SORTERS_MISSING, (
-    f"a sort-only site with no sorter: {SITE_SORTERS_MISSING} — add it to site_sorters.csv")
+    f"a sort-only site with no sorter: {SITE_SORTERS_MISSING} — add it to site_machines.csv")
 
 # ══ CHANGE 28 — THE ARRIVAL SET: interstate enters at SIX sites, not three ═════════════
 # 48% of interstate first sorts at Sunshine West / Melbourne Nth / Bayswater (section 12a, now
@@ -1806,14 +1808,9 @@ log.info(f"  {len(bill_of_materials)} BOM rows — no delivery-side recipe consu
 
 UNLOADS = ["UNLOAD_HAND", "UNLOAD_ULD", "UNLOAD_LONGREACH"]
 LOADS   = ["LOAD_HAND", "LOAD_ULD", "LOAD_LONGREACH"]
-_mr = pd.read_csv(FASS / "machine_rates.csv")
-RATE_HR   = {_r.machine: int(_r.rate_hr) for _r in _mr.itertuples() if pd.notna(_r.rate_hr)}
-UNIT_COST = dict(zip(_mr.machine, _mr.unit_cost))
-FIXED_YR  = {_r.machine: int(_r.fixed_yr) for _r in _mr.itertuples()}
-
 SORT_SITES = {s: dict(v) for s, v in SITE_SORTERS.items()}
 for h in sorted(HUB_SET):
-    SORT_SITES[h]["SORT_MANUAL"] = RATE_HR["SORT_MANUAL"]
+    SORT_SITES[h]["SORT_MANUAL"] = MACHINES.rate(h, "SORT_MANUAL")
 
 def _kind(a):
     if a.startswith("UNLOAD") or a == "BAG_UNLOAD": return "UNLOAD"
@@ -1870,20 +1867,22 @@ _r2_pool  = {h: (sum(IN_by_hub_class[(g, c)] for c in CLASSES for g in cls_hubs(
                  if h in R2_SORT_SITES else 0)
              for h in sorted(ARRIVAL_SET)} if HUB_SORT_ROUNDS == 2 else {h: 0 for h in ARRIVAL_SET}
 _r2_even  = _r2_touch / max(len(R2_SORT_SITES), 1)
-_dock_base = sum(RATE_HR[a] for a in UNLOADS) * AVAILABLE_HOURS_PER_DAY["UNLOAD"]
-_dock_day  = len(HUB_SET) * _dock_base
+# per site, because a site may localise its dock rates in site_machines.csv
+_dock_base = {h: sum(MACHINES.rate(h, a) for a in UNLOADS) * AVAILABLE_HOURS_PER_DAY["UNLOAD"]
+              for h in sorted(ARRIVAL_SET | HUB_SET)}
+_dock_day  = sum(_dock_base[h] for h in sorted(HUB_SET))
 _need = {h: (_r1_hub[h] + min(_r2_even, _r2_pool[h])) * (1 + HUB_DOCK_BUFFER)
          for h in sorted(ARRIVAL_SET)}
-HUB_DOCK_SCALE = ({h: max(1.0, _need[h] / _dock_base) for h in sorted(ARRIVAL_SET)}
+HUB_DOCK_SCALE = ({h: max(1.0, _need[h] / _dock_base[h]) for h in sorted(ARRIVAL_SET)}
                   if HUB_DOCK_AUTOSCALE else {h: 1.0 for h in sorted(ARRIVAL_SET)})
 log.info(f"  hub docks: {_touch:,} touches/side network-wide (R1 {_r1_touch:,} + R2 {_r2_touch:,}) "
          f"vs a stated fleet of {int(_dock_day):,} EA/day. Sized PER HUB (Change 22):")
 for h in sorted(ARRIVAL_SET, key=lambda x: -_need[x]):
     _sc = HUB_DOCK_SCALE[h]
     log.info(f"    {HUB_CODE[h]:<4} R1 {_r1_hub[h]:>9,.0f} (pinned) + R2 {min(_r2_even, _r2_pool[h]):>9,.0f} "
-             f"(cap: pool {_r2_pool[h]:,.0f}) = {_need[h]:>9,.0f} needed vs {int(_dock_base):,} base "
-             f"-> x{_sc:.3f}" + (f"  ** {math.ceil(_dock_base * _sc):,} EA/side **" if _sc > 1.0 else "  (fits)"))
-_short_hubs = {h: math.ceil(_dock_base * (s - 1)) for h, s in HUB_DOCK_SCALE.items() if s > 1.0}
+             f"(cap: pool {_r2_pool[h]:,.0f}) = {_need[h]:>9,.0f} needed vs {int(_dock_base[h]):,} base "
+             f"-> x{_sc:.3f}" + (f"  ** {math.ceil(_dock_base[h] * _sc):,} EA/side **" if _sc > 1.0 else "  (fits)"))
+_short_hubs = {h: math.ceil(_dock_base[h] * (s - 1)) for h, s in HUB_DOCK_SCALE.items() if s > 1.0}
 if _short_hubs:
     log.info(f"  NOTE: the stated dock fleet is SHORT at "
              + ", ".join(f"{HUB_CODE[h]} (+{v:,} EA/day/side)" for h, v in sorted(_short_hubs.items()))
@@ -1901,7 +1900,7 @@ wc_rows, site_machines = [], {}
 def _rate(site, a):
     if site in ROUND2_PUD_SET and a in (PUD_R2_UNLOAD, PUD_R2_LOAD):
         return PUD_R2_DOCK_HR[site]     # dock sized to the volume capped onto this PDC
-    r = SORT_SITES.get(site, {}).get(a, RATE_HR.get(a))
+    r = SORT_SITES.get(site, {}).get(a, MACHINES.rate(site, a))
     if site in ARRIVAL_SET and a in (UNLOADS + LOADS):
         r = r * HUB_DOCK_SCALE[site]    # Change 22/28: docks sized to THIS site's own touches
     return r
@@ -1912,7 +1911,7 @@ for site in sorted(set(list(SORT_SITES) + list(DELIVERY_PUD_SET) + list(ROUND2_P
     for a in ms:
         win = window(_kind(a))     # hours available PER PERIOD; the cap applies in every period
         wc_rows.append([f"WC_{a}_{_short(site)}", site, "Include", "Open", "Existing",
-                        int(_rate(site, a) * win), "EA", round(FIXED_YR[a] / WORKING_DAYS),
+                        int(_rate(site, a) * win), "EA", round(MACHINES.fixed_yr(site, a) / WORKING_DAYS),
                         "", "", "", f"{a} at {_short(site)}: {_rate(site,a):,}/hr x {win}h per period "
                         f"({AVAILABLE_HOURS_PER_DAY[_kind(a)]}h/day over {len(PERIODS)} period(s))",
                         "", ""])
@@ -1925,7 +1924,7 @@ for site in sorted(DELIVERY_PUD_SET):
     vol = lm_by_pud.get(site, 0) * peak
     drivers = math.ceil(vol / min(VAN_CAPACITY, DELIVERED_PER_HOUR * win)) if vol else 0
     wc_rows.append([f"WC_DRIVER_WAVE_{_short(site)}", site, "Include", "Open", "Existing",
-                    int(drivers * DELIVERED_PER_HOUR * win), "EA", round(FIXED_YR["DRIVER_WAVE"] / WORKING_DAYS),
+                    int(drivers * DELIVERED_PER_HOUR * win), "EA", round(MACHINES.fixed_yr(site, "DRIVER_WAVE") / WORKING_DAYS),
                     "", "", "", f"{drivers} drivers x {DELIVERED_PER_HOUR}/hr x {win}h per period "
                     f"(sized on the busiest period, {peak:.0%} of the day)", "", ""])
     site_machines.setdefault(site, [])
@@ -1968,7 +1967,7 @@ for site, ms in site_machines.items():
             continue
         pname = f"{_short(site)}_{a}"
         proc_rows.append([pname, a, 1, "Include", wc, wc_cap[wc], "EA", "DAY",
-                          UNIT_COST[a], "EA", "", "", "", "", "", "",
+                          MACHINES.unit_cost(site, a), "EA", "", "", "", "", "", "",
                           f"{a} at {_short(site)}", ""])
         procs_at[site].setdefault(a, []).append(pname)
 # ── CHANGE 48: A SECOND, SCALED COPY OF EVERY ROUND-2 PROCESS ────────────────────────
@@ -2936,7 +2935,7 @@ if MANUAL_SORT_SHARE > 0:
         assert need <= have, (
             f"Change 39: a {_hub_share:.1%} manual floor at {code} needs {need:,.0f} EA/day of "
             f"hand sort but WC_SORT_MANUAL holds {have:,.0f}. Lower MANUAL_SORT_SHARE or raise "
-            f"the SORT_MANUAL rate in machine_rates.csv.")
+            f"the SORT_MANUAL rate in machine_rates.csv (or at this site, in site_machines.csv).")
     _mtot = sum(MANUAL_FLOOR.values())
     log.info(f"  Change 39: manual-sort floor {MANUAL_SORT_SHARE:.0%} of DELIVERED volume "
              f"= {_hub_share:.1%} of round-1 hub sort -> {_mtot:,.0f} EA/day by hand ("

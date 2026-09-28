@@ -42,6 +42,7 @@ import pandas as pd
 
 import _report                    # the phase report card — see _report.py
 from _log import get_logger      # every message in the build goes through here
+from _facilities import Machines, ops_capacity
 from _paths import CHAIN1_OUT as IN1, CHAIN2_OUT as IN2, FASS, FINAL_OUT as OUT
 
 log = get_logger(__file__)
@@ -88,8 +89,7 @@ for _i, _r in _fac.iterrows():
         _sum.append((_r.facilityname, int(_r.throughputcapacity), int(_c1), _tot))
         _fac.at[_i, "throughputcapacity"] = _tot
 if _sum:
-    _ops = {r["pud"]: int(r["capacity_ea"]) for r in __import__("csv").DictReader(
-        open(FASS / "pud_capacity.csv", encoding="utf-8-sig"))}
+    _ops = ops_capacity(FASS)
     log.info("  throughput caps = chain-2 delivery + chain-1 collection (the building carries both):")
     for _n, _d, _c, _t in sorted(_sum, key=lambda x: -x[3]):
         _o = _ops.get(_n)
@@ -179,9 +179,7 @@ for _side in (IN1, IN2):
     if _f.exists():
         for _r in pd.read_csv(_f).itertuples():
             _load[_r.facilityname] = _load.get(_r.facilityname, 0) + int(_r.sortload_ea)
-_rate = pd.read_csv(FASS / "machine_rates.csv").set_index("machine")["rate_hr"].to_dict()
-for _r in pd.read_csv(FASS / "site_sorters.csv").itertuples():
-    _rate[(_r.site, _r.machine)] = _r.rate_hr
+_mach = Machines(FASS)
 _hrs = dict(zip(*pd.read_csv(FASS / "operating_hours.csv")[["kind", "hours_per_day"]].T.values))
 _head = float(pd.read_csv(FASS / "dials.csv").set_index("parameter").loc["HUB_DOCK_BUFFER",
                                                                         "value"])
@@ -195,8 +193,8 @@ for _r in work_centers.itertuples():
     _m = _machine_of(_r.workcentername, _r.facilityname)
     if "SORT" not in _m:
         continue
-    _i = _rate.get((_r.facilityname, _m)) or _rate.get(_m)
-    if not _i or pd.isna(_i):
+    _i = _mach.rate(_r.facilityname, _m)
+    if not _i:
         continue
     _installed[_r.workcentername] = float(_i) * float(_hrs["SORT"])
     _sorters.setdefault(_r.facilityname, []).append(_r.workcentername)
@@ -217,6 +215,13 @@ for _fac, _names in sorted(_sorters.items()):
     if _scale > 1.0:
         _lift.append((_fac, _load.get(_fac, 0), _base, _base * _scale, _scale))
 write(work_centers, "WorkCenters")
+# only the combined model knows every machine a building runs, so a site_machines.csv row that
+# reaches nothing is reported here — a typo, or a role that no longer runs the machine
+_runs = {}
+for _r in work_centers.itertuples():
+    _runs.setdefault(_r.facilityname, []).append(_machine_of(_r.workcentername, _r.facilityname))
+for _s, _m in _mach.unused(_runs):
+    log.info(f"  NOTE site_machines.csv: {_s} has a {_m} row but runs no {_m} — the row does nothing")
 
 log.info("\n  sorters sized on the COMBINED load of both entities (one machine, one rate):")
 for _fac, _l, _b, _c, _sc in sorted(_lift, key=lambda x: -x[4]):

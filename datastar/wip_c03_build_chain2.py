@@ -12,7 +12,7 @@ text, byte-for-byte as the exporter wrote it. The alternative -- teaching s2a to
 database -- would turn a copy into a fork.
 
 NEEDS BESIDE IT: s2a_build_chain2.py, scan_reduction.py, s1a_export_chain2_factors.py,
-_paths.py, _log.py, _report.py, table_bridge.py.
+_paths.py, _log.py, _report.py, _facilities.py, table_bridge.py.
 """
 
 import logging

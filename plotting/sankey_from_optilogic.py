@@ -561,7 +561,9 @@ def build():
             cut = take * c2l[k] / _out
             c2l[k] -= cut
             c2(f"B:{came_from}", k[1], k[2], k[3], cut, "despatch")
-        second_at[site] -= take
+        # only the despatch side is debited. The hop INTO the relaying site rode a D: link, so it
+        # was never counted in second_at[site] — debiting it there too cancelled that site's own
+        # round-2 arrivals (Bayswater's 491 EA on the 29 Sep run) and dropped their ribbon.
         despatch_out[site] -= take
 
     if _rl["third"] > 0.5:

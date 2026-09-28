@@ -253,7 +253,7 @@ Reads:
 
 - `inputs/factors_observed/` — every measured factor, plus `_provenance.csv` for the run header
 - `inputs/factors_assumed/` — `dials.csv`, `machine_rates.csv`, `operating_hours.csv`,
-  `pud_capacity.csv`, `site_sorters.csv`, `sort_only_sites.csv`,
+  `sites.csv` (incl. `capacity_ea`), `site_machines.csv`,
   `unload_mix.csv`, `transport_modes.csv`, `period_split.csv`
 - `inputs/melbourne/` — `temp_clustered.csv`, `cluster_summary.csv`, `all-data.xlsx` (nodes),
   the first-mile catchment geojson
@@ -440,6 +440,20 @@ chain-2 notebook. `model_common.py` joins them and asserts they agree.
 [sites.csv](inputs/factors_assumed/sites.csv) holds the modelling half (node, code, display, role,
 delivers / sorts / first_mile); the exporter keeps the measurement half (which scan name is which
 building) beside its evidence.
+
+**A building is two files.** [sites.csv](inputs/factors_assumed/sites.csv) is one row per building,
+including `capacity_ea`, the stated ops throughput (depots only).
+[site_machines.csv](inputs/factors_assumed/site_machines.csv) is one row per (building, machine):
+
+| to… | add |
+|---|---|
+| add a building | a `sites.csv` row; if it sorts, one `site_machines.csv` row per `SORT_AUTO_*` machine with its `rate_hr` |
+| run a machine differently at one site | a `site_machines.csv` row with only the fields that differ, e.g. `PUD_Avalon,SORT_AUTO_SML,8000,0.03,600000` |
+
+[machine_rates.csv](inputs/factors_assumed/machine_rates.csv) stays the catalogue, and a blank cell
+falls back to it. What a building runs is still decided by its role in `sites.csv`, so a row for a
+machine the site does not run changes nothing, and s2c logs a note saying so. All three build steps
+read these files through [pipeline/_facilities.py](pipeline/_facilities.py).
 
 **`plotting/` scripts are run from the repo root**, e.g. `uv run python plotting/sankey_facility_path.py`.
 Each begins with a shim putting `model_input_preparation/` and `utilities/` on `sys.path`, because

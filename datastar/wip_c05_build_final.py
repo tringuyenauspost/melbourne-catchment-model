@@ -9,7 +9,7 @@ the despatch split changes what each site can produce, and the no-relay rule is 
 exactly that, so running no-relay first writes the wrong rows.
 
 NEEDS BESIDE IT: s2c_build_final.py, s3a_split_despatch2.py, s3b_no_relay.py,
-s3c_narrow_sort_band.py, _paths.py, _log.py, _report.py, table_bridge.py.
+s3c_narrow_sort_band.py, _paths.py, _log.py, _report.py, _facilities.py, table_bridge.py.
 """
 
 import logging
