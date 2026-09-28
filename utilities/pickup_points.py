@@ -39,6 +39,7 @@ SITES = ROOT / "inputs/factors_assumed/sites.csv"
 FAC2 = ROOT / "outputs/melbourne_optilogic_chain2_observed/Facilities.csv"
 OUT = ROOT / "outputs/pickup_points.csv"          # --day writes a dated sibling
 OUT_STOPS = ROOT / "outputs/pickup_stops.csv"     # --per-stop, one row per collection
+OUT_FLEET = ROOT / "outputs/pickup_fleet_metrics.csv"   # routes per day and volume per route
 
 # What --per-stop calls each vehicle. A RELABEL for the downstream tool, not a model change:
 # the model's modes stay Red_Van and Truck in first_mile_pickup.csv and transport_modes.csv,
@@ -62,6 +63,66 @@ def vehicle_by_site():
     print(f"  vehicle from first_mile_pickup.csv, default {default}:")
     for mode in sorted(set(out.values())):
         print(f"    {mode:10s} {', '.join(sorted(s for s, m in out.items() if m == mode))}")
+    return out
+
+
+def site_volume():
+    """site van-arm name -> the model's daily collection, floor(PEAK_2025_<node> x PEAK_FACTOR).
+
+    Read from dials_chain1.csv, so it is the number chain 1 pins, not a copy of it."""
+    d = pd.read_csv(DIALS).set_index("parameter")["value"]
+    factor = float(d["PEAK_FACTOR"])
+    sites = pd.read_csv(SITES)
+    return {r.van_arm: int(float(d[f"PEAK_2025_{r.node}"]) * factor)
+            for r in sites[sites.van_arm.notna()].itertuples()}
+
+
+def fleet_metrics(col, veh, day):
+    """Routes per day per site, and the model's volume per route and per stop.
+
+    A ROUTE is a CCP route name with at least one counted pickup that day, and it stands in for
+    one vehicle. That is an upper bound on vehicles if a van runs two routes in a day, and it
+    counts only the routes that collect: a truck route running nothing but network linehaul is
+    not in it. Volume is the model's daily peak, not a CCP measurement — CCP records none at the
+    red-van sites — so vol/route is "what each collecting vehicle would carry at peak"."""
+    daily = (col.assign(day=col.day.astype(str))
+                .groupby(["facility", "day"])
+                .agg(stops=("addr", "size"), routes=("route", "nunique")).reset_index())
+    vol = site_volume()
+    m = daily.groupby("facility").agg(
+        days=("day", "nunique"), stops_per_day=("stops", "mean"),
+        routes_per_day=("routes", "mean"), routes_min=("routes", "min"),
+        routes_max=("routes", "max"))
+    m.insert(0, "vehicle_type", m.index.map(veh))
+    m["stops_per_route"] = m.stops_per_day / m.routes_per_day
+    m["peak_volume_ea"] = m.index.map(vol)
+    m["vol_per_route"] = m.peak_volume_ea / m.routes_per_day
+    m["vol_per_stop"] = m.peak_volume_ea / m.stops_per_day
+    m = m.reset_index().sort_values(["vehicle_type", "facility"])
+
+    # the same ratios over each vehicle type, weighted by what each site actually runs
+    agg = m.groupby("vehicle_type")[["stops_per_day", "routes_per_day", "peak_volume_ea"]].sum()
+    agg["stops_per_route"] = agg.stops_per_day / agg.routes_per_day
+    agg["vol_per_route"] = agg.peak_volume_ea / agg.routes_per_day
+    agg["vol_per_stop"] = agg.peak_volume_ea / agg.stops_per_day
+    spread = m.groupby("vehicle_type").vol_per_route.agg(["min", "max"])
+    agg["vol_per_route_site_min"], agg["vol_per_route_site_max"] = spread["min"], spread["max"]
+    agg = agg.reset_index().assign(facility="ALL " + agg.index.str.upper())
+
+    out = pd.concat([m, agg], ignore_index=True)
+    rnd = {c: 1 for c in ["stops_per_day", "routes_per_day", "stops_per_route",
+                          "vol_per_route", "vol_per_stop",
+                          "vol_per_route_site_min", "vol_per_route_site_max"]}
+    out = out.round(rnd)
+    path = OUT_FLEET if not day else OUT_FLEET.with_name(f"{OUT_FLEET.stem}_{day}{OUT_FLEET.suffix}")
+    out.to_csv(path, index=False)
+
+    basis = day if day else f"mean of {int(m.days.max())} days"
+    print(f"\n  fleet metrics ({basis}; a route = one collecting vehicle):")
+    show = ["vehicle_type", "facility", "stops_per_day", "routes_per_day", "stops_per_route",
+            "peak_volume_ea", "vol_per_route", "vol_per_stop"]
+    print(out[show].to_string(index=False))
+    print(f"wrote {path.relative_to(ROOT)}")
     return out
 
 
@@ -189,6 +250,7 @@ def main(day=None, per_stop=False):
     by_day["total"] = by_day.sum(axis=1)
     by_day.loc[("", "all sites"), :] = by_day.sum()
     print(by_day.astype(int).to_string())
+    fleet_metrics(col, veh, day)
     bad = pts[~pts.in_victoria]
     if len(bad):
         print("\n  flagged in_victoria=False:")

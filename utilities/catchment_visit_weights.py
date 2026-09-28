@@ -20,19 +20,28 @@ THE FOUR BASIS DECISIONS (confirmed with the modeller, 2026-09-22):
   window        Mon-Fri 18-22 May 2026. One full week, so Monday is not counted twice (the
                 extract also holds 25 May) and the 895-job Saturday and 27-job 26 May are out.
   weight        stop-events, as above.
-  own buildings a van's stop at its own PDC or another DC-Vans site is a return or transfer,
-                not a collection from the public in that postcode, so it does not count. The
-                test runs ONLY over Location Type == Network: over Customer rows the same
-                name patterns hit real customers (Kings Transport, Harris Scarfe - Laverton
-                DC, Chemist Warehouse (Chadstone DC)).
+  own buildings a van's stop at a PDC (its own base included), a hub, a transport facility
+                or StarTrack is a return or transfer, not a collection from the public in
+                that postcode, so it does not count. The test runs ONLY over Location Type
+                == Network: over Customer rows the same name patterns hit real customers
+                (Kings Transport, Harris Scarfe - Laverton DC, Chemist Warehouse (Chadstone
+                DC)).
+  delivery      REVISED 2026-09-24, at the user's direction: a RED VAN's pickup at a delivery
+  centres       centre (DC / MDC / Delivery Centre — Moorabbin DC - Vans, Port Melbourne DC,
+                Mt Waverley MDC) IS a pickup point, 1,402 stops a week. The van collects what
+                that DC has gathered, and the DC is where it enters the red-van network. The
+                transports are unchanged: their DC stops name a destination building and are
+                linehaul, so DELIVERY_CENTRE only relaxes the rule for the van sites.
   delivery-only ten (facility, postcode) cells appear in the catchment purely because the
                 notebook's red-van branch never filtered Booking Type. Eight of them are in
                 the polygon set and collect nothing, ever. They are dropped, not floored.
 
 A CONSEQUENCE OF THE OWN-BUILDING RULE, worth naming because it was not obvious up front.
-Eight further cells turn out to hold own-building stops and NOTHING else: a red van's only
-visit to that postcode all week is to another site's dock (Oakleigh South's only stop in 3175
-is Dandenong DC, Sunshine West's only stop in 3122 is Hawthorn DC). Under the rule above they
+Some cells hold own-building stops and NOTHING else: a red van's only visit to that postcode
+all week is to another site's dock. There were eight before the 2026-09-24 revision; six were
+delivery centres (Sunshine West's 3122 is Hawthorn DC) and now count. Two remain, both hubs:
+Oakleigh South's 3175 (Dandenong Letters Centre, 14 stops) and 3045 (Tullamarine Parcel
+Facility, 5). Under the rule above they
 collect nothing from the public, so DROP_OWN_ONLY_CELLS drops them on the same grounds as the
 delivery-only cells. No volume leaves the model when they go — the weights are normalised
 within a site and the site total stays pinned by PEAK_2025_* — it redistributes over the
@@ -78,6 +87,8 @@ COLLECTING = ["Pickup", "Pickup & Delivery"]
 # our own buildings, tested over Location Type == Network ONLY (see docstring)
 OWN = (r"PDC|PARCEL FACILITY|LETTERS CENTRE|VAN OP|VAN SERV|TRANSPORT|GATEWAY"
        r"|\bDC\b|\bMDC\b|STARTRACK|DELIVERY CENTRE")
+# a delivery centre — for a red van, a pickup here counts (see "delivery centres" above)
+DELIVERY_CENTRE = r"\bDC\b|\bMDC\b|DELIVERY CENTRE"
 # places the public lodges: post offices (LPO / RP, a retail outlet), lockers, posting boxes.
 # RP is Retail Post, NOT one of our operational buildings — "Collins St West RP (Melbourne
 # GPO)", "Malvern RP", "Coburg RP" — and the red-van sites already collect 2,144 RP stops a
@@ -126,9 +137,11 @@ def collection_slice(w):
     """The jobs that are a collection from the public, on each site's own filter."""
     wk = w[w.day.astype(str).between(*WINDOW)].copy()
     _name = wk.loc_name.astype(str).str.upper()
-    _own = wk.loc_type.eq("Network") & _name.str.contains(OWN, regex=True, na=False)
     _lodge = wk.loc_type.eq("Network") & _name.str.contains(LODGE, regex=True, na=False)
     is_tr = wk.facility.isin(TRANSPORTS)
+    _dc = ~is_tr & _name.str.contains(DELIVERY_CENTRE, regex=True, na=False)
+    _own = (wk.loc_type.eq("Network") & _name.str.contains(OWN, regex=True, na=False)
+            & ~_dc)
     sel = ((is_tr & wk.booking_type.isin(COLLECTING) & (wk.loc_type.eq("Customer") | (_lodge & ~_own)))
            | (~is_tr & wk.booking_type.isin(COLLECTING)))
     col = wk[sel].copy()
