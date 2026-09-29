@@ -93,8 +93,7 @@ Project `Temp_FY26_Melbourne`. Four macros run in order: **2 → 3 → 4 → 5**
 
 **Logic**
 - **Pickup per site** = `PEAK_2025_<site>` × `PEAK_FACTOR` (0.70). The sites are 5 red-van depots and 2 transport facilities.
-- **Collection cells:** each site's volume is split **equally** across its first-mile route clusters (`PICKUP_CLUSTERS` = `pick_up_cluster`).
-  - The alternative is per-postcode weights (`PICKUP_WEIGHTS`). Only one of the two can be on.
+- **Collection cells:** each site's volume is split **equally** across its first-mile route clusters (`PICKUP_CLUSTERS` = `pick_up_cluster`). This is the only basis: the postcode polygons and weights were removed 2026-09-29.
 - **Leg 1 vehicle** comes from `first_mile_pickup.csv`.
   - Transports use Truck and run as a **service**: they collect and drive straight to their despatch destinations, with no sort at the transport site.
   - Red-van depots use Red_Van.
@@ -110,7 +109,6 @@ Project `Temp_FY26_Melbourne`. Four macros run in order: **2 → 3 → 4 → 5**
 **Inputs**
 - From Macro 3: all 20 `Wip_C03_*` tables. `Facilities`, `SupplierCapabilities` and `TransportationModes` are the ones read.
 - `factors_assumed/`: `dials_chain1.csv`, `dials.csv`, `sites.csv`, `machine_rates`, `site_machines`, `operating_hours`, `transport_modes`, `first_mile_pickup.csv`, `first_mile_despatch.csv`
-- `melbourne/first_mile_catchment_polygons.csv` (only when `PICKUP_CLUSTERS` = none)
 - `pick_up_cluster/`: `cluster_summary.csv`, `temp_clustered.csv`
 
 **Outputs** (17 tables, `Wip_C04_*`)

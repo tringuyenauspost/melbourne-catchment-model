@@ -3,9 +3,8 @@
     IN    inputs/factors_assumed/          dials_chain1 + dials, machine_rates, site_machines,
                                           operating_hours, transport_modes, sites,
                                           first_mile_despatch
-          inputs/melbourne/<polygons.csv> the 411 catchment polygons, as WKT
-          inputs/<clusters>/              OPTIONAL — first-mile route clusters instead, one
-                                          collection cell per van round (PICKUP_CLUSTERS)
+          inputs/<PICKUP_CLUSTERS>/       the first-mile routing run: cluster_summary.csv +
+                                          temp_clustered.csv, one collection cell per van round
           outputs/…_chain2_observed/      Facilities, TransportationModes, SupplierCapabilities
     OUT   outputs/melbourne_optilogic_chain1/                     (17 tables)
 
@@ -20,8 +19,8 @@ routed to it, which is the same rule the hub list already followed.
 Balance: `P = Kept at depot + Vic Metro to Metro + PDO terminate + interstate + regional
 pickup`, where PDO terminate is a share of the export volume that ends at the same hub.
 
-NOTHING IS COPIED. The pickup suppliers are built from the collection cells — catchment
-polygons, or the first-mile route clusters where PICKUP_CLUSTERS names them — lane distances from
+NOTHING IS COPIED. The pickup suppliers are built from the first-mile route clusters (one per
+van round, at its centroid), lane distances from
 haversine over those coordinates, the recipes from the stage rule, machine capacities from
 machine_rates x operating_hours, and the terminate is read off chain 2's own
 SupplierCapabilities. No previous build is read, so this folder rebuilds from inputs/ alone.
@@ -40,12 +39,11 @@ Run:  uv run python pipeline/s2b_build_chain1.py
 import math
 
 import pandas as pd
-import shapely
 
 import _report                    # the phase report card — see _report.py
 from _log import get_logger      # every message in the build goes through here
 from _facilities import Machines
-from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, FASS, INPUTS, RAW
+from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, FASS, INPUTS
 
 log = get_logger(__file__)
 OUT.mkdir(parents=True, exist_ok=True)
@@ -55,11 +53,6 @@ _d1 = pd.read_csv(FASS / "dials_chain1.csv").set_index("parameter")
 def d1(name):
     r = _d1.loc[name]
     return _CAST[r["kind"]](r["value"])
-
-def d1_opt(name, default):
-    """A dial that may be absent from an older dials_chain1.csv. Used for PICKUP_WEIGHTS, whose
-    default reproduces the build that existed before it."""
-    return d1(name) if name in _d1.index else default
 
 def write(df, name):
     df.to_csv(OUT / f"{name}.csv", index=False, encoding="utf-8-sig")
@@ -96,7 +89,7 @@ def pickup_cluster_cells(folder, site_of):
                             WHICH BUILDING a cluster belongs to: `cluster_id` is F<n>_<k>, and
                             the F<n> is an index into the run's own facility list, not a name.
     So the building comes from the stop table's `Facility Name`, which is the van-arm spelling
-    sites.csv already carries — the same join `GEOJSON_SITE` makes for the catchment polygons.
+    sites.csv already carries (`van_arm`, read into GEOJSON_SITE below).
     """
     d = INPUTS / folder
     summ = pd.read_csv(d / "cluster_summary.csv",
@@ -247,8 +240,6 @@ def generate():
         """The (destination -> share) this site despatches on. A per-class row wins over an ALL
         row, and an unlisted site falls back to the class dials."""
         return (SITE_SPLIT.get((site, cls)) or SITE_SPLIT.get((site, "ALL")) or hub_split[cls])
-    assert d1("REGIONAL_PICKUP_TERMINATE") == REG_HUB
-    assert d1("PEAK_ROUNDING") == "floor"
     _dl = pd.read_csv(FASS / "dials.csv").set_index("parameter")
     DOCK_HEAD = float(_dl.loc["HUB_DOCK_BUFFER", "value"])
     FAC_HEAD  = float(_dl.loc["FACILITY_BUFFER", "value"])
@@ -333,79 +324,16 @@ def generate():
 
     # ══ 1. the collection cells, and what each site collects ═════════════════════════
     # A CELL is the unit a site's collection is divided into: one supplier, one coordinate, one
-    # leg-1 arc. Which geography the cells are is a dial.
-    #
-    # CATCHMENT (default) — one cell per postcode polygon the site's vans reach.
-    # WKT + shapely, not .geojson + geopandas: the platform has no GDAL, and reading the file
-    # and taking a centroid are shapely operations either way. utilities/convert_catchment_
-    # geojson.py writes this CSV and refuses to if any centroid moves at all.
-    #
-    # CLUSTER — one cell per first-mile ROUTE CLUSTER, read out of the routing run's own
-    # cluster_summary.csv. This is the pickup side of what chain 2 already does with the
-    # delivery clusters: a cell is a van round rather than a postcode, so it stands where the
-    # vehicle actually works and the cell count is the fleet, not the map. The dial names the
-    # folder under inputs/; empty means catchments, so the default build is unchanged.
-    CFOLD = d1_opt("PICKUP_CLUSTERS", "")
-    CFOLD = "" if CFOLD.strip().lower() in ("", "nan", "none") else CFOLD.strip()
-    if CFOLD:
-        gj = pickup_cluster_cells(CFOLD, GEOJSON_SITE)
-        CELL, CELL_SRC = "pickup cluster", f"{CFOLD}/cluster_summary.csv"
-    else:
-        gj = pd.read_csv(RAW / d1("CATCHMENT_POLYGONS"))
-        gj["node"] = gj.facility_name.map(GEOJSON_SITE)
-        assert gj.node.notna().all(), f"the polygons name a site not in GEOJSON_SITE: {sorted(set(gj.facility_name) - set(GEOJSON_SITE))}"
-        # The supplier stands at the polygon's middle. A centroid in a geographic CRS is "likely
-        # incorrect" for area or distance and immaterial here: these are single postcodes a few km
-        # across, and the result reproduces the 11-August build's coordinates to six decimal
-        # places. Re-projecting would move every supplier for no gain.
-        _c = shapely.centroid(shapely.from_wkt(gj.pop("geometry")))
-        gj["lat"], gj["lon"] = shapely.get_y(_c), shapely.get_x(_c)
-        gj["cell_order"] = gj.post_code.astype(int)
-        gj["cell"] = gj.cell_order.astype(str)
-        CELL, CELL_SRC = "catchment", d1("CATCHMENT_POLYGONS")
+    # leg-1 arc. It is one first-mile ROUTE CLUSTER — one van round — read out of the routing
+    # run's own cluster_summary.csv, the pickup side of what chain 2 does with the delivery
+    # clusters. It stands where the vehicle actually works, and the cell count is the fleet.
+    # (The postcode-polygon and per-postcode-weight bases were removed 2026-09-29.)
+    CFOLD = d1("PICKUP_CLUSTERS").strip()
+    gj = pickup_cluster_cells(CFOLD, GEOJSON_SITE)
+    CELL, CELL_SRC = "pickup cluster", f"{CFOLD}/cluster_summary.csv"
     gj["sup"] = "SUP_PKP_" + gj.node.map(ORIGIN_TAG) + "_" + gj.cell
     assert gj.sup.is_unique, f"two cells produce the same supplier name in {CELL_SRC}"
 
-    # ── how a site's collection splits across its cells ───────────────────────────────
-    # DEFAULT: equally. Every cell a site has — each postcode it reaches, or each round it
-    # runs — is modelled as collecting the same volume, which is what this build did before
-    # PICKUP_WEIGHTS existed and what it still does when that dial is empty. The equal-split
-    # arithmetic below is kept verbatim rather than expressed as a weight of 1/NCAT, so "off"
-    # is byte-identical and not merely equal to within floating point. THIS IS THE BRANCH THE
-    # CLUSTER BASIS TAKES: a route cluster carries no measured collection of its own, so a
-    # site's volume is divided equally across its rounds.
-    #
-    # WEIGHTED: the dial names a CSV of (facility_name, post_code, weight) in inputs/melbourne/.
-    # Weights are a SHAPE only — they sum to 1 within a site, so the site total, the pin, what
-    # each building handles, the work centres and the facility caps are all untouched. Only the
-    # per-catchment supply caps move. A catchment the file does not list is DROPPED: the weights
-    # file is the authority on which cells collect anything (postcodes reached only on a
-    # delivery booking, or only at another site's dock, collect nothing from the public).
-    # pandas reads an empty cell as NaN and str(NaN) is the truthy "nan", so the off states are
-    # spelled out rather than tested for emptiness
-    WFILE = d1_opt("PICKUP_WEIGHTS", "")
-    WFILE = "" if WFILE.strip().lower() in ("", "nan", "none") else WFILE.strip()
-    assert not (WFILE and CFOLD), (
-        f"PICKUP_WEIGHTS ({WFILE}) and PICKUP_CLUSTERS ({CFOLD}) are both set. The weights file "
-        "is keyed by postcode, so it says nothing about a route cluster — set one or the other. "
-        "Clusters split a site's collection EQUALLY across its rounds")
-    if WFILE:
-        _w = pd.read_csv(RAW / WFILE)
-        _need = {"facility_name", "post_code", "weight"}
-        assert _need <= set(_w.columns), f"{WFILE} needs {sorted(_need)}, has {sorted(_w.columns)}"
-        _bad = _w.groupby("facility_name").weight.sum().sub(1).abs().max()
-        assert _bad < 1e-6, f"{WFILE}: weights do not sum to 1 within a site (off by {_bad})"
-        assert set(_w.facility_name) <= set(gj.facility_name), (
-            f"{WFILE} weights a site the polygons do not have: "
-            f"{sorted(set(_w.facility_name) - set(gj.facility_name))}")
-        _n0 = len(gj)
-        gj = gj.merge(_w[["facility_name", "post_code", "weight"]],
-                      on=["facility_name", "post_code"], how="inner")
-        assert len(gj) == len(_w), (
-            f"{WFILE} has {len(_w)} rows but only {len(gj)} matched a polygon — a weighted "
-            "(facility, postcode) is missing from CATCHMENT_POLYGONS")
-        log.info(f"    pickup weights from {WFILE}: {len(gj):,} catchments carry a weight, "
-                 f"{_n0 - len(gj)} dropped as collecting nothing")
     NCAT = gj.node.value_counts().to_dict()
     assert set(NCAT) >= set(PEAK), (
         f"{CELL_SRC} gives no collection cell to {sorted(short(p) for p in set(PEAK) - set(NCAT))}"
@@ -417,21 +345,14 @@ def generate():
         want = {"PP": int(tot * PP_SHARE)}
         want["EP"] = tot - want["PP"]
         cells = gj[gj.node == p]
+        # a route cluster carries no measured collection of its own, so a site's volume is
+        # divided EQUALLY across its rounds, each cap rounded UP to the cent so the caps still
+        # sum to at least the pin (floor) — the SUP_PKP_* supply guard the Min equality needs
         for c in CLASSES:
-            if WFILE:
-                # each catchment's own cap, rounded UP to the cent exactly as the equal split
-                # rounds its single cap, so the caps still sum to at least the pin — the
-                # SUP_PKP_* Site Production Capacity guard PEAK_ROUNDING relies on
-                caps = {r.cell: math.ceil(r.weight * want[c] * 100) / 100
-                        for r in cells.itertuples()}
-                for pc_, v_ in caps.items():
-                    PERCAT[(p, pc_, c)] = v_
-                PIN[(p, c)] = math.floor(sum(caps.values()))
-            else:
-                one = math.ceil(want[c] / NCAT[p] * 100) / 100
-                for pc_ in cells.cell:
-                    PERCAT[(p, pc_, c)] = one
-                PIN[(p, c)] = math.floor(NCAT[p] * one)
+            one = math.ceil(want[c] / NCAT[p] * 100) / 100
+            for pc_ in cells.cell:
+                PERCAT[(p, pc_, c)] = one
+            PIN[(p, c)] = math.floor(NCAT[p] * one)
             assert sum(PERCAT[(p, r.cell, c)] for r in cells.itertuples()) \
                    >= PIN[(p, c)] - 1e-9, (
                 f"{short(p)} {c}: per-cell caps sum below the pin — the supply guard is "
@@ -558,10 +479,9 @@ def generate():
         f"the hubs — the carve-out cannot be larger than the sink it comes out of")
     PDO_CLS = largest_remainder(PDO_TOT, {c: MTERM[c] + KEEP[c] for c in CLASSES})
 
-    log.info(f"\n  chain 1 GENERATED from inputs/ ({d1('MODEL_BASIS')}), no previous build read:")
+    log.info(f"\n  chain 1 GENERATED from inputs/ (2025 peak), no previous build read:")
     log.info(f"    {len(gj):,} {CELL} cells from {CELL_SRC[:38]}… over {len(FIRST)} sites"
-             + (f", split EQUALLY per site ({'/'.join(str(NCAT[p_]) for p_ in FIRST)})"
-                if CFOLD else ""))
+             f", split EQUALLY per site ({'/'.join(str(NCAT[p_]) for p_ in FIRST)})")
     log.info(f"    metro pickup {METRO_P:,} ({FACTOR:.2f} x each site's own 2025 peak)"
              f"  +  regional {REG_P:,} at {short(REG_HUB)}  =  P {TOTAL_P:,}")
     log.info(f"    terminate: kept at depot {sum(KEEP.values()):,} | Vic Metro to Metro "
@@ -623,7 +543,7 @@ def generate():
     T["BillOfMaterials"] = frame("BillOfMaterials", boms)
     T["ProductionPolicies"] = frame("ProductionPolicies", prod_pol)
 
-    # suppliers: one per catchment polygon, plus the regional lodgement at its hub
+    # suppliers: one per collection round, plus the regional lodgement at its hub
     sup = [{"suppliername": r.sup, "status": "Include", "country": "Australia",
             "latitude": round(r.lat, 6), "longitude": round(r.lon, 6),
             "notes": f"{CELL} {r.cell}, {ORIGIN_TAG[r.node]} origin"}

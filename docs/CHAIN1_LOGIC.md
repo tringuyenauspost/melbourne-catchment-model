@@ -60,42 +60,31 @@ Built by Macro 4. Chain 1 models the first mile: **pickup → round-0 sort → r
 - `utilities/pickup_points.py --per-stop --day 2026-05-18` writes one row per collection: warehouse (site) → pickup address, and vehicle (`red_van` / `white_van`).
 
 **Step 2: first-mile routing run**
-- Run `first_mile_pickup_v4` (OSRM road distances).
+- Run the RCB routing (OSRM road distances). Current run: `pickup_new_version_2`, 2026-09-29.
 - Vehicle settings:
-  - red_van: 200 parcels, target 25 stops;
-  - white_van: 180 parcels, target 10 stops.
+  - red_van: 200 parcels, target 19 stops;
+  - white_van: 180 parcels, target 3 stops.
 - It groups each site's stops into **van rounds (clusters)** and writes:
   - `cluster_summary.csv`: one row per cluster, with its centroid;
   - `temp_clustered.csv`: one row per stop, with its cluster and site.
 - These files are saved in `inputs/pick_up_cluster/`.
 
-**Step 3: chain 1 reads the clusters (`PICKUP_CLUSTERS = pick_up_cluster`)**
+**Step 3: chain 1 reads the clusters (`PICKUP_CLUSTERS = pick_up_cluster`) — the only collection basis**
 - One cluster becomes one supplier, `SUP_PKP_<site>_C<k>`, at the cluster centroid.
-- **402 cells:**
-  - Oakleigh South 100
-  - Sunshine West 81
-  - Bayswater 68
-  - Melbourne North 49
-  - Dandenong South 44
-  - Melbourne Transport 38
-  - Dandenong Transport 22
+- **663 cells:**
+  - Oakleigh South 135
+  - Melbourne Transport 126
+  - Sunshine West 112
+  - Bayswater 92
+  - Dandenong Transport 72
+  - Melbourne North 66
+  - Dandenong South 60
 - Each site's volume is split **equally** across its clusters. A cluster carries no measured volume of its own.
-- Leg-1 distance is the haversine distance from cluster centroid to collecting site. The mean is 16.0 km, against 22.1 km on postcode centroids.
+- Leg-1 distance is the haversine distance from cluster centroid to collecting site. The mean is 11.6 km.
 
 ---
 
-## 5. Alternative basis, built but not switched on
-
-**Postcode weights (`PICKUP_WEIGHTS`, `utilities/catchment_visit_weights.py`)**
-- Share of stop-events per (site, postcode) over the week, using the same filter rules as section 3.
-- Stop-events are the best predictor of collected volume where CCP records it: r = 0.998 at Dandenong Transport and 0.988 at Melbourne Transport.
-- The weights replace the equal split across a site's **postcodes**.
-- This is shape only: the site total stays at `PEAK_2025` × `PEAK_FACTOR`.
-- It cannot run together with `PICKUP_CLUSTERS`. It is `none` today.
-
----
-
-## 6. Measured from CCP but not in the model yet
+## 5. Measured from CCP but not in the model yet
 
 **Transport despatch (`utilities/transport_middle_mile.py`)**
 - Each transport pickup is paired with the next delivery on the same route, in planned-time order.
@@ -151,7 +140,7 @@ Mon–Fri mean. Monday 18 May runs more routes (red vans 447, trucks 174), so vo
 
 ---
 
-## 7. Known gaps
+## 6. Known gaps
 
 - **The clusters predate the delivery-centre rule.** They were built from 9,088 stops on 18 May; the rule adds about 290 stops that day. Re-run the routing on the new `pickup_stops` file, then rebuild Macro 4.
 - **Equal split per cluster:** a busy round and a quiet round collect the same volume.
