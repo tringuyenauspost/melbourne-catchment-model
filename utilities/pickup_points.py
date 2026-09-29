@@ -77,8 +77,43 @@ def site_volume():
             for r in sites[sites.van_arm.notna()].itertuples()}
 
 
-def fleet_metrics(col, veh, day):
-    """Routes per day per site, and the model's volume per route and per stop.
+def route_rounds(jobs, col, veh):
+    """Pickup ROUNDS per (facility, day, route): runs of pickups each ending at an unload.
+
+    A van often collects, drives back to unload, and goes out again — HX000 at Sunshine West on
+    18 May does 8 pickups, unloads at SWPDC at 13:25 ("Deliver All Available - Customer
+    Collections"), then 13 more and unloads again at 17:50. Stops per ROUTE says 21; stops per
+    TRIP says 8 and 13, and a trip is what a vehicle's capacity has to hold.
+
+    An UNLOAD is a delivery booking at one of our own buildings (the OWN name test, Network
+    rows only), except a red van's drop at a delivery centre: those are relay drops ("Deliver
+    all ex-Moorabbin DC"), not the van emptying what it collected. Jobs run in planned-time
+    order within the route and day. Pickups after the last unload are one more round — the
+    return to base is often simply not booked — so a route with pickups has >= 1 round."""
+    n = jobs.loc_name.astype(str).str.upper()
+    van = jobs.facility.map(veh).eq("Red_Van")
+    dc = van & n.str.contains(cvw.DELIVERY_CENTRE, regex=True, na=False)
+    unload = (jobs.loc_type.eq("Network") & n.str.contains(cvw.OWN, regex=True, na=False) & ~dc
+              & jobs.booking_type.isin(["Delivery", "Pickup & Delivery"]))
+    j = jobs.assign(unload=unload, pick=jobs.index.isin(col.index),
+                    t=pd.to_timedelta(jobs["Job Planned Time"].astype(str)))
+    j = j[j.facility.isin(set(col.facility)) & j.day.isin(set(col.day))]
+    j = j.sort_values(["facility", "day", "route", "t"], kind="stable")
+    rows = []
+    for (fac, d, route), g in j.groupby(["facility", "day", "route"], sort=False):
+        if not g.pick.any():
+            continue
+        rounds, cur = 0, 0
+        for p, u in zip(g.pick, g.unload):
+            cur += p
+            if u and cur:
+                rounds, cur = rounds + 1, 0
+        rows.append((fac, str(d), route, int(g.pick.sum()), rounds + (cur > 0)))
+    return pd.DataFrame(rows, columns=["facility", "day", "route", "stops", "rounds"])
+
+
+def fleet_metrics(col, veh, day, rounds):
+    """Routes per day per site, and the model's volume per route, per round and per stop.
 
     A ROUTE is a CCP route name with at least one counted pickup that day, and it stands in for
     one vehicle. That is an upper bound on vehicles if a van runs two routes in a day, and it
@@ -95,14 +130,26 @@ def fleet_metrics(col, veh, day):
         routes_max=("routes", "max"))
     m.insert(0, "vehicle_type", m.index.map(veh))
     m["stops_per_route"] = m.stops_per_day / m.routes_per_day
+    ndays = rounds.groupby("facility").day.nunique()
+    m["rounds_per_day"] = rounds.groupby("facility").rounds.sum() / ndays
+    m["multi_round_pct"] = 100 * rounds.rounds.gt(1).groupby(rounds.facility).mean()
+    m["rounds_per_route"] = m.rounds_per_day / m.routes_per_day
+    m["stops_per_round"] = m.stops_per_day / m.rounds_per_day
     m["peak_volume_ea"] = m.index.map(vol)
     m["vol_per_route"] = m.peak_volume_ea / m.routes_per_day
+    m["vol_per_round"] = m.peak_volume_ea / m.rounds_per_day
     m["vol_per_stop"] = m.peak_volume_ea / m.stops_per_day
     m = m.reset_index().sort_values(["vehicle_type", "facility"])
 
     # the same ratios over each vehicle type, weighted by what each site actually runs
-    agg = m.groupby("vehicle_type")[["stops_per_day", "routes_per_day", "peak_volume_ea"]].sum()
+    agg = m.groupby("vehicle_type")[["stops_per_day", "routes_per_day", "rounds_per_day",
+                                      "peak_volume_ea"]].sum()
     agg["stops_per_route"] = agg.stops_per_day / agg.routes_per_day
+    agg["multi_round_pct"] = 100 * rounds.rounds.gt(1).groupby(
+        rounds.facility.map(veh)).mean()
+    agg["rounds_per_route"] = agg.rounds_per_day / agg.routes_per_day
+    agg["stops_per_round"] = agg.stops_per_day / agg.rounds_per_day
+    agg["vol_per_round"] = agg.peak_volume_ea / agg.rounds_per_day
     agg["vol_per_route"] = agg.peak_volume_ea / agg.routes_per_day
     agg["vol_per_stop"] = agg.peak_volume_ea / agg.stops_per_day
     spread = m.groupby("vehicle_type").vol_per_route.agg(["min", "max"])
@@ -111,8 +158,10 @@ def fleet_metrics(col, veh, day):
 
     out = pd.concat([m, agg], ignore_index=True)
     rnd = {c: 1 for c in ["stops_per_day", "routes_per_day", "stops_per_route",
-                          "vol_per_route", "vol_per_stop",
+                          "rounds_per_day", "multi_round_pct", "stops_per_round",
+                          "vol_per_route", "vol_per_round", "vol_per_stop",
                           "vol_per_route_site_min", "vol_per_route_site_max"]}
+    rnd["rounds_per_route"] = 2
     out = out.round(rnd)
     path = OUT_FLEET if not day else OUT_FLEET.with_name(f"{OUT_FLEET.stem}_{day}{OUT_FLEET.suffix}")
     out.to_csv(path, index=False)
@@ -121,6 +170,10 @@ def fleet_metrics(col, veh, day):
     print(f"\n  fleet metrics ({basis}; a route = one collecting vehicle):")
     show = ["vehicle_type", "facility", "stops_per_day", "routes_per_day", "stops_per_route",
             "peak_volume_ea", "vol_per_route", "vol_per_stop"]
+    print(out[show].to_string(index=False))
+    print("\n  pickup rounds (a round = pickups ending at an unload at our own building):")
+    show = ["vehicle_type", "facility", "rounds_per_day", "rounds_per_route", "multi_round_pct",
+            "stops_per_round", "vol_per_round"]
     print(out[show].to_string(index=False))
     print(f"wrote {path.relative_to(ROOT)}")
     return out
@@ -186,21 +239,22 @@ def collection_stops(day=None):
 
     `day` narrows to a single date. `stops` counts JOB ROWS either way, so an address called at
     twice in a day counts twice — the duplicates are the point, not noise to be folded away."""
-    col = cvw.collection_slice(cvw.load_ccp())
+    jobs = cvw.load_ccp()
+    col = cvw.collection_slice(jobs)
     col = col[~col.own].copy()
     if day:
         n0 = len(col)
         col = col[col.day.astype(str).eq(day)]
         assert len(col), f"no collection stops on {day} — the window is {cvw.WINDOW}"
         print(f"  {day} only: {len(col):,} of {n0:,} stops in the week")
-    return col
+    return col, jobs   # every CCP job too: route_rounds needs the unloads the filter drops
 
 
 def main(day=None, per_stop=False):
     out = (OUT if not day else OUT.with_name(f"{OUT.stem}_{day}{OUT.suffix}"))
     print(f"building the pickup-point extract{' for ' + day if day else ''}")
     veh = vehicle_by_site()
-    col = collection_stops(day)
+    col, jobs = collection_stops(day)
 
     geo = (pd.read_csv(GEOCODE, usecols=["Location Address", "google_latitude",
                                          "google_longitude", "suburb"])
@@ -250,7 +304,7 @@ def main(day=None, per_stop=False):
     by_day["total"] = by_day.sum(axis=1)
     by_day.loc[("", "all sites"), :] = by_day.sum()
     print(by_day.astype(int).to_string())
-    fleet_metrics(col, veh, day)
+    fleet_metrics(col, veh, day, route_rounds(jobs, col, veh))
     bad = pts[~pts.in_victoria]
     if len(bad):
         print("\n  flagged in_victoria=False:")

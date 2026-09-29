@@ -130,7 +130,33 @@ Mon–Fri mean. Monday 18 May runs more routes (red vans 447, trucks 174), so vo
 - **Red-van sites are fairly even:** 367–510 EA per vehicle.
   - Sunshine West runs many short routes with big stops (15.4 stops, 32.5 EA each).
   - Dandenong South runs fewer, longer routes with smaller stops (22.9 stops, 22.3 EA each).
-- **Every red-van site is above van capacity.** The model's red van carries about 160 EA effective (180 physical), so each route would need 2–3 loads. Either vans unload and go out again, or part of the peak is not van-collected (e.g. counter lodgement at the depot).
+- **Every red-van site is above van capacity per route.** The model's red van carries about 160 EA effective (180 physical). Part of this is explained by pickup rounds (below); the rest is not.
+
+**Pickup rounds: vans unload mid-shift and go out again**
+- A **round** is a run of pickups ending at an **unload**: a delivery booking at one of our own buildings, in planned-time order along the route.
+  - A red van's drop at a delivery centre is not an unload. It is a relay ("Deliver all ex-Moorabbin DC").
+  - Pickups after the last booked unload count as one more round; the return to base is often not booked.
+- **Example: HX000, Sunshine West, Mon 18 May.** 8 pickups (Footscray LPO/RP, posting boxes, CNP Brands, The Good Guys…) → unload at SWPDC at 13:25 (*"Deliver All Available – Customer Collections, Clearances"*) → 13 pickups (Woolworths CFC, Western Bulldogs, Chemist Warehouse…) → unload at SWPDC at 17:50. That is 21 stops per route, but 8 and 13 per trip.
+- Output: the same `pickup_fleet_metrics.csv`, columns `rounds_per_day`, `rounds_per_route`, `multi_round_pct`, `stops_per_round`, `vol_per_round`.
+
+| Site | Stops/route | Rounds/route | Routes with 2+ rounds | Stops/round | Volume/vehicle (day) | Volume/round |
+|---|---|---|---|---|---|---|
+| Bayswater | 20.0 | 1.56 | 51% | 12.8 | 367 | 235 |
+| Dandenong South | 22.9 | 1.71 | 67% | 13.4 | 510 | 299 |
+| Melbourne North | 16.0 | 1.39 | 35% | 11.5 | 424 | 305 |
+| Oakleigh South | 22.5 | 1.76 | 52% | 12.8 | 445 | 253 |
+| Sunshine West | 15.4 | 1.48 | 43% | 10.4 | 500 | 338 |
+| **All red vans** | 18.7 | **1.57** | 48% | **11.9** | 453 | **290** |
+
+- **For trip-based sizing, use 12 stops per round and 1.6 rounds per route** (red vans). The per-route number stays 19 for sizing vans.
+- **Rounds are about the vehicle's load, not the fleet.** They don't change how many vans are needed, only how much each trip carries: 290 EA per trip against 453 per day.
+- **Sunshine West's high volume per vehicle is mostly the single-number fleet.**
+  - Dividing its 2,112 Monday stops by 19 gives 111 vans and 609 EA each.
+  - CCP shows 136 routes a day at 15.4 stops each, so it's 500 EA per vehicle, and 338 per round at 1.48 rounds.
+- **It is still the highest per trip, and still about 2× van capacity.** The reason is volume per stop: 32.5 EA against 18–27 elsewhere. Part of Sunshine West's peak (96,849) is probably not van-collected (counter lodgement, business-hub drop-offs). **Needs ops confirmation.**
+- **Vans unload at their own depot, not a hub.** Sunshine West over the week: SWPDC 743 unloads, Tullamarine Parcel Facility 135, Sunshine West Van Operations 50, MPF none.
+- **Trucks are not comparable on rounds.** They show 1.8 rounds per route at about 2 customer stops each, because a transport truck drops at our buildings as it goes (it runs as a service). The truck figure to use stays 3.4 stops per route.
+- **Caveat:** 5–29% of red-van routes (17% at Sunshine West) have pickups after their last booked unload. They count as one final round. If some of those vans carry on to a second route instead, rounds are slightly understated.
 - **Trucks against red vans:** trucks average 3.3× more per vehicle, but that is all Melbourne Transport.
   - Dandenong Transport carries **less** per vehicle than any red-van site (263 EA).
   - Melbourne Transport carries 2,253 EA per vehicle, 8.6× Dandenong Transport, on the same 3.4 stops per route and above the model's truck capacity (1,500 EA).
