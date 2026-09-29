@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 PROJECT_NAME = "Temp_FY26_Melbourne"
 
 # which macro to wire, as the first argument: `python setup_macro_drop_task.py macro_3`.
-# Macros 3-5 hold one build step each, so they get one drop task each.
+# Macros 3-6 hold one build step each, so they get one drop task each.
 MACRO_NAME = sys.argv[1] if len(sys.argv) > 1 else "macro_2"
 
 # key -> the tables that script rebuilds. The key also MATCHES THE SCRIPT'S TASK NAME
@@ -84,6 +84,9 @@ TABLES_BY_MACRO = {
         "Wip_C02_ObsRound2Sites",
         "Wip_C02_ObsPath",
         "Wip_C02_Provenance",
+    ],
+    "DeliveryCatchment": [
+        "Wip_C02_DeliveryCatchment",
     ],
   },
   # One build step per macro, so one drop task each. The table names are the Anura table
@@ -158,6 +161,21 @@ TABLES_BY_MACRO = {
         "Wip_C05_WorkCenters",
     ],
   },
+  # One step, one drop task, but many table sets: s4a writes one model PER SCENARIO, published
+  # as Wip_C06_<code>_* (Wip_C06_<code>C1_* when chain 1 rides along). Both variants are listed
+  # so flipping the CHAIN1 dial never strands the other set; DROP IF EXISTS makes the absent
+  # ones free. A scenario added to scenarios.csv needs its code added to the tuple here.
+  "macro_6": {
+    "Scenarios": [
+        f"Wip_C06_{code}{c1}_{t}"
+        for code in ("S0", "S1", "S2", "S3")
+        for c1 in ("", "C1")
+        for t in ("CustomerDemand", "CustomerFulfillmentPolicies", "Customers", "Facilities",
+                  "FlowConstraints", "Groups", "ProcurementPolicies", "Products",
+                  "SupplierCapabilities", "Suppliers", "TransportationModes",
+                  "TransportationPolicies")
+    ],
+  },
 }
 
 if MACRO_NAME not in TABLES_BY_MACRO:
@@ -171,12 +189,14 @@ MATCH_KEYS = {
     "ScanClean": ("ScanClean",),
     "ScanAnalysis": ("ScanAnalysis", "Analysis"),
     "ObsFactors": ("ObsFactors", "ObservedFactors", "Factors"),
+    "DeliveryCatchment": ("DeliveryCatchment", "Catchment"),
     # macros 3-5 do not exist yet, so their task names are not known. These are the spellings
     # worth trying; if none matches exactly one task the script stops and prints the macro's
     # task list, and the answer goes in TASK_FOR.
     "Chain2": ("C03", "Chain2", "chain2"),
     "Chain1": ("C04", "Chain1", "chain1"),
     "Final": ("C05", "Final", "final"),
+    "Scenarios": ("C06", "Scenario", "scenario"),
 }
 
 # key -> the script task's EXACT name. Taken from the macro itself (2026-09-21), which holds:
@@ -206,7 +226,8 @@ LEGACY_TASKS = ["Drop Wip_C02 tables", "Drop ScanClean tables",
 # The drop task is named for the macro it lives in, not for macro_2: a drop task in macro_4
 # called Wip_C02_DropChain1 would read as somebody else's.
 TASK_PREFIX = {"macro_2": "Wip_C02_", "macro_3": "Wip_C03_",
-               "macro_4": "Wip_C04_", "macro_5": "Wip_C05_"}.get(MACRO_NAME, "Wip_")
+               "macro_4": "Wip_C04_", "macro_5": "Wip_C05_",
+               "macro_6": "Wip_C06_"}.get(MACRO_NAME, "Wip_")
 
 
 def DROP_TASK(key):

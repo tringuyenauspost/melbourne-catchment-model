@@ -15,6 +15,7 @@ table.
     s3a  s3a_split_despatch2.py     a Despatch2 per route
     s3b  s3b_no_relay.py            a site despatches only what it makes
     s3c  s3c_narrow_sort_band.py    round-2 pinned on the measured share
+    s4a  s4a_build_scenarios.py     the Network Plan scenarios S0-S3  -> outputs/melbourne_scenario_*/
 
 WHERE THE DATA IS. Nothing here counts parent directories: `_paths.py` resolves `inputs/` and
 `outputs/` once, and every script asks it. Drop this folder beside them and it just works; set
@@ -81,6 +82,8 @@ STEPS = [
      "post-process — a site despatches only what it makes", "outputs/melbourne_optilogic_final"),
     ("s3c", "s3c_narrow_sort_band.py",
      "post-process — round-2 pinned on the measured share", "outputs/melbourne_optilogic_final"),
+    ("s4a", "s4a_build_scenarios.py",
+     "scenarios — S0-S3 cut from the finished baseline", "outputs/melbourne_scenario_*"),
 ]
 IDS = [i for i, *_ in STEPS]
 PATCHES = ("s3a", "s3b", "s3c")     # these EDIT the model folder; the others WRITE one
