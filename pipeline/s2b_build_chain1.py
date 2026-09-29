@@ -43,6 +43,7 @@ import pandas as pd
 import _report                    # the phase report card — see _report.py
 from _log import get_logger      # every message in the build goes through here
 from _facilities import Machines
+from _routes import BASES, Routes
 from _paths import CHAIN1_OUT as OUT, CHAIN2_OUT, FASS, INPUTS
 
 log = get_logger(__file__)
@@ -574,20 +575,37 @@ def generate():
         rr, s = math.radians(XY[node]["latitude"]), math.radians(XY[node]["longitude"])
         return round(2 * 6371 * math.asin(math.sqrt(
             math.sin((rr - p) / 2) ** 2 + math.cos(p) * math.cos(rr) * math.sin((s - q) / 2) ** 2)), 2)
+    # THE PICKUP IS A ROUTE, NOT A LINE (dial PICKUP_ROUTE_BASIS): `route` puts the pickup
+    # routing run's own van on the lane — round-trip road stem plus the stops, km and hours
+    # (_routes.py). A service site's truck going straight to a hub the run never drove to gets
+    # the run's stops and an estimated stem. `haversine` is the old straight line, byte-for-byte.
+    BASIS = d1("PICKUP_ROUTE_BASIS")
+    assert BASIS in BASES, f"PICKUP_ROUTE_BASIS must be one of {BASES}"
+    ROUTES = Routes(INPUTS / CFOLD, pd.read_csv(FASS / "sites.csv"), "pickup") \
+        if BASIS == "route" else None
+    if ROUTES:
+        log.info(f"  pickup on the routing run: {ROUTES.describe()}")
     for r in gj.sort_values(["node", "cell_order"]).itertuples():
         v, direct = van_of(r.node), r.node in DIRECT
         for c in CLASSES:
             for e in (hubs_of(c, ORIGIN_TAG[r.node]) if direct else (r.node,)):
-                d = km_pt(r.lat, r.lon, e)
+                d, hr = km_pt(r.lat, r.lon, e), ""
+                if ROUTES:
+                    d, hr = ROUTES.lane((r.node, r.cell_order),
+                                        XY[e]["latitude"], XY[e]["longitude"])
                 leg1.append({"originname": r.sup, "destinationname": e,
                     "productname": f"{c}_{ORIGIN_TAG[r.node]}_Pickup", "modename": v.mode,
                     "status": "Include", "fixedcost": round(v.rate_per_km * d, 2),
                     "fixedcostrule": "Prorate", "averageshipmentsize": float(v.capacity_ea),
                     "averageshipmentsizeuom": "EA", "transportdistance": d,
-                    "transportdistanceuom": "KM",
+                    "transportdistanceuom": "KM", "transporttime": hr,
+                    "transporttimeuom": "HR" if ROUTES else "",
                     "notes": (f"1 pickup: {CELL}->{short(e)} DIRECT on {v.mode} "
                               f"({short(r.node)} service, no stop)" if direct
                               else f"1 pickup: {CELL}->PDC on {v.mode}")})
+    if ROUTES:
+        log.info(f"  pickup lanes: {ROUTES.used['run']:,} on the run's own route, "
+                 f"{ROUTES.used['estimated']:,} estimated (a service truck straight to a hub)")
     for c in CLASSES:
         cap.append({"suppliername": REG_SUP, "productname": f"{c}_{REG_TAG}_Pickup",
                     "status": "Include", "supplycapacity": REG_PIN[c], "supplycapacityuom": "EA",

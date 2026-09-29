@@ -5,7 +5,7 @@ Project `Temp_FY26_Melbourne`. Five macros run in order: **2 → 3 → 4 → 5 �
 **Rules for every macro**
 - Each script task has a **`Wip_C0<n>_Drop<step>`** SQL task directly before it, created by `setup_macro_drop_task.py <macro_n>`. To re-run a step, start at its Drop task, or the old rows stay.
 - The build scripts (`s2a`, `s2b`, `s2c`, `s3a–c`, `s4a`) are **verbatim copies** of `pipeline/`. Edit `pipeline/`, then re-copy. `_paths.py` is the only fork.
-- Every macro needs these files in the same folder: `_paths.py`, `_log.py`, `_report.py`, `table_bridge.py`. Macros 3–5 also need `_facilities.py` (reads `sites.csv` + `site_machines.csv`).
+- Every macro needs these files in the same folder: `_paths.py`, `_log.py`, `_report.py`, `table_bridge.py`. Macros 3–5 also need `_facilities.py` (reads `sites.csv` + `site_machines.csv`). Macros 3, 4 and 6 also need `_routes.py` (reads the routing runs' `cluster_summary.csv` + `temp_clustered.csv`).
 - Tables move as **text**, so each published table is byte-identical to the local build's CSV.
 
 ---
@@ -185,6 +185,7 @@ Project `Temp_FY26_Melbourne`. Five macros run in order: **2 → 3 → 4 → 5 �
   | S2 | solver chooses | closed | optional | Port Melbourne only | no |
   | S3 | solver chooses | closed | open | all PDCs | yes |
 
+- Last-mile and pickup lanes use the same basis as the baseline (`LASTMILE_ROUTE_BASIS` in `dials.csv`, `PICKUP_ROUTE_BASIS` in `dials_chain1.csv`). A zone moved to another PDC keeps its own stops and gets an estimated stem.
 - Products keep their **origin**, e.g. `PP_MPF` or `EP_STG_Darebin`. When a zone moves to another PDC, its freight still comes from the same sort site.
 - S0 is checked against the baseline: same demand total, and every last-mile lane has the same distance and cost.
 - Capacity is a Max on each PDC's **delivery** outflow, so chain 1 pickup doesn't use it up.
@@ -199,3 +200,17 @@ Project `Temp_FY26_Melbourne`. Five macros run in order: **2 → 3 → 4 → 5 �
 - `Wip_C06_<S0..S3>_*` when chain 1 is off, `Wip_C06_<S0..S3>C1_*` when it's on.
 - The drop task covers both variants (96 names). If you add a scenario to `scenarios.csv`, add its code to the macro_6 list in `setup_macro_drop_task.py`.
 - One-off setup: run `setup_macro_drop_task.py macro_6` after creating the script task.
+
+---
+
+## Last-mile and pickup lanes: routing run basis
+
+Used by macros 3 (delivery lanes), 4 (pickup lanes) and 6 (scenario lanes), through `_routes.py`.
+
+- Each delivery zone and pickup cluster is **one van route** in its routing run (`melbourne/` for delivery, `PICKUP_CLUSTERS` for pickup).
+- With `route` (the default), a lane carries that van's whole route:
+  - `transportdistance` = `stem_km + intra_cluster_km`. The stem is a **round-trip road** distance.
+  - `transporttime` (HR) = `(stem_min + intra_cluster_total_min) / 60`, i.e. driving plus stops. The 90-minute load at the building is left out.
+  - Cost is still `$/km × km` per trip, so cost per trip rises in step with the distance.
+- The run only drove each route from its own building. From **any other** building, the stem is estimated from the straight line at the run's median road factor (about 2.4 km and 2.9 min per straight-line km); the zone's own stops are kept. This covers scenario reallocations and transport-service trucks going straight to a hub. Applied to routes the run did drive, the estimate is off by 7% of km (median).
+- `haversine` restores the old one-way straight line, byte-identical.

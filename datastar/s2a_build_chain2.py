@@ -89,6 +89,7 @@ log.info(f"REPO: {REPO}")
 #                              never hand-edit; re-run the exporter after a re-extract
 from _paths import FASS, FOBS
 from _facilities import Machines, ops_capacity
+from _routes import BASES, Routes
 for _p, _fix in ((FASS, "restore inputs/factors_assumed (hand-managed)"),
                  (FOBS, "run: uv run python s1a_export_chain2_factors.py")):
     assert _p.exists(), f"missing {_p} — {_fix}"
@@ -2318,14 +2319,27 @@ def _km(a, b):
     h = math.sin(dphi/2)**2 + math.cos(math.radians(la1))*math.cos(math.radians(la2))*math.sin(dlmb/2)**2
     return 2 * 6371.0 * math.asin(math.sqrt(h))
 
+# THE LAST MILE IS A ROUTE, NOT A LINE (dial LASTMILE_ROUTE_BASIS). `route` puts the delivery
+# routing run's own van on each PDC->zone lane — the round-trip road stem plus the stops inside
+# the zone, in km and hours (see _routes.py). `haversine` is the one-way straight line the model
+# always had, byte-for-byte.
+LASTMILE_ROUTE_BASIS = dial("LASTMILE_ROUTE_BASIS")
+assert LASTMILE_ROUTE_BASIS in BASES, f"LASTMILE_ROUTE_BASIS must be one of {BASES}"
+ROUTES = Routes(RAW, SITES, "delivery") if LASTMILE_ROUTE_BASIS == "route" else None
+if ROUTES:
+    log.info(f"  last mile on the routing run: {ROUTES.describe()}")
+
 tp_rows = []
-def lane(o, d, prod, note, mode=None, rule="Prorate"):
+def lane(o, d, prod, note, mode=None, rule="Prorate", route=None):
+    """`route` = (km, hours) overrides the straight line and fills transporttime."""
     if o not in coords or d not in coords:
         return
-    dist = round(_km(coords[o], coords[d]), 2)
+    dist = round(_km(coords[o], coords[d]), 2) if route is None else route[0]
     row = {c: "" for c in TP_COLS}
     row.update(originname=o, destinationname=d, productname=prod, status="Include",
                transportdistance=dist, transportdistanceuom="KM", notes=note)
+    if route is not None:
+        row.update(transporttime=route[1], transporttimeuom="HR")
     if mode:
         row.update(modename=mode, averageshipmentsize=MODE_CAP[mode], averageshipmentsizeuom="EA",
                    fixedcost=round(MODE_RATE[mode] * dist, 2), fixedcostrule=rule)
@@ -2417,9 +2431,15 @@ for h in sorted(set(_r2_sites) | ARRIVAL_SET):     # non-R2 sites still despatch
                     lane(h, d, dsp_final(c, _fam_tag), _note, mode=m, rule="Treat As Full")
 # 8) SINK: delivery. Each zone from its own PDC, for the origins that PDC can actually hold.
 for r in clusters.itertuples():
+    _rt = (ROUTES.lane((r.pud, int(r.cluster_id.split("_")[1])), *coords[r.pud])
+           if ROUTES else None)
     for c in CLASSES:
         for tag in zone_tags_cls(r.pud, c):
-            lane(r.pud, r.customername, delivered(c, tag), "8 SINK delivery: PDC->zone", mode="White_Van")
+            lane(r.pud, r.customername, delivered(c, tag), "8 SINK delivery: PDC->zone",
+                 mode="White_Van", route=_rt)
+if ROUTES:
+    log.info(f"  last-mile lanes: {ROUTES.used['run']:,} zones on the run's own route, "
+             f"{ROUTES.used['estimated']:,} estimated")
 
 transportation_policies = pd.DataFrame(tp_rows).reindex(columns=TP_COLS)
 write_csv(transportation_policies, "TransportationPolicies")

@@ -12,7 +12,9 @@ its tables are Wip_C06_S1_* (or Wip_C06_S1C1_*), the code before the first under
 task has to name its tables in advance, and a short fixed code keeps that list stable when a
 scenario's description changes.
 
-NEEDS BESIDE IT: s4a_build_scenarios.py, _paths.py, _log.py, table_bridge.py.
+NEEDS BESIDE IT: s4a_build_scenarios.py, _paths.py, _log.py, _routes.py, table_bridge.py.
+With a `route` basis it also reads the two routing runs' cluster_summary.csv +
+temp_clustered.csv from Raw Inputs (melbourne/ and PICKUP_CLUSTERS), as macros 3 and 4 do.
 """
 
 import logging

@@ -27,12 +27,16 @@ WHAT IS KEPT, AND HOW.
                    `code`), or at the depot for a STG_ flavour (pickup kept at that depot). An
                    approximation: a round-2 sort in between is not modelled.
     last mile      a LASTMILE_MODE lane from every candidate PDC to every zone, priced exactly as
-                   s2a prices it (haversine km, $/km x km per trip, Prorate) — so every S0 lane is
-                   the baseline's own lane, asserted below.
+                   s2a prices it ($/km x km per trip, Prorate) on the SAME basis the baseline was
+                   built on (dials.csv LASTMILE_ROUTE_BASIS): `route` = the routing run's own van,
+                   round-trip road stem + the zone's stops, km and hours; `haversine` = the
+                   straight line. A zone moved to another PDC keeps its stops and gets an
+                   estimated stem (_routes.py). Every S0 lane is the baseline's own lane, asserted.
     chain 1        optional (CHAIN1 / --chain1). The pickup clusters the in-scope PDCs collect,
                    each cluster's baseline volume as its supply, collected on PICKUP_MODE, then
                    sent onward to one sink per hub split by chain 1's own interstate dials
                    (INTERSTATE_PP_MPF_SHARE, INTERSTATE_EP_HUB) — a proxy for where it goes next.
+                   Pickup lanes follow dials_chain1.csv PICKUP_ROUTE_BASIS the same way.
 
 WHAT A SCENARIO CHANGES (scenarios.csv, one row each):
 
@@ -58,7 +62,8 @@ import shutil
 import pandas as pd
 
 from _log import banner, get_logger, kv, table, wrap
-from _paths import FASS, FINAL_OUT, OUTPUTS
+from _paths import FASS, FINAL_OUT, INPUTS, OUTPUTS, RAW
+from _routes import Routes
 
 log = get_logger(__file__)
 
@@ -77,6 +82,11 @@ def read_base(name):
 def dials():
     d = pd.read_csv(FASS / "dials_scenario.csv")
     return {r.parameter: CAST[r.kind](r.value) for r in d.itertuples()}
+
+
+def dials_chain2():
+    d = pd.read_csv(FASS / "dials.csv")
+    return {r.parameter: r.value for r in d.itertuples()}
 
 
 def dials_chain1():
@@ -145,7 +155,15 @@ class Baseline:
         tp = read_base("TransportationPolicies")
         lm = tp[tp.destinationname.isin(self.zone_home) & tp.originname.isin(scope)]
         self.base_lanes = lm.drop_duplicates(["originname", "destinationname"]).set_index(
-            ["originname", "destinationname"])[["transportdistance", "fixedcost", "modename"]]
+            ["originname", "destinationname"])[["transportdistance", "fixedcost", "modename",
+                                                "transporttime"]]
+
+        # the basis the BASELINE was built on — the scenarios must price lanes the same way
+        site_frame = self.sites.reset_index()
+        self.lm_routes = (Routes(RAW, site_frame, "delivery")
+                          if dials_chain2()["LASTMILE_ROUTE_BASIS"] == "route" else None)
+        self.pk_routes = (Routes(INPUTS / C1["PICKUP_CLUSTERS"].strip(), site_frame, "pickup")
+                          if C1["PICKUP_ROUTE_BASIS"] == "route" else None)
 
         # chain 1: pickup clusters the in-scope PDCs collect, and their volume
         self.collects = [p for p in scope if int(self.sites.loc[p, "first_mile"]) == 1]
@@ -208,14 +226,27 @@ def build(B, sc, chain1):
             constraintvalue=cap, constraintvalueuom="EA", status="Include",
             notes="PDC delivery capacity, EA per day"))
 
-    def lane(o, d, prod, mode, rule, speed, note):
-        dist = round(km(B.coords[o], B.coords[d]), 2)
+    def lane(o, d, prod, mode, rule, speed, note, route=None):
+        """`route` = (km, hours) from the routing run replaces the straight line and speed."""
+        dist = round(km(B.coords[o], B.coords[d]), 2) if route is None else route[0]
+        hours = round(dist / speed, 3) if route is None else route[1]
         rows["TransportationPolicies"].append(dict(
             originname=o, destinationname=d, productname=prod, modename=mode, status="Include",
             fixedcost=round(B.mode_rate[mode] * dist, 2), fixedcostrule=rule,
             averageshipmentsize=B.mode_cap[mode], averageshipmentsizeuom="EA",
             transportdistance=dist, transportdistanceuom="KM",
-            transporttime=round(dist / speed, 3), transporttimeuom="HR", notes=note))
+            transporttime=hours, transporttimeuom="HR", notes=note))
+
+    def zone_route(s, z):
+        """The zone's van from PDC s — the run's own route from its home, estimated stem else."""
+        if not B.lm_routes:
+            return None
+        return B.lm_routes.lane((B.zone_home[z], int(z.rsplit("_", 1)[1])), *B.coords[s])
+
+    def pickup_route(p, cl):
+        if not B.pk_routes:
+            return None
+        return B.pk_routes.lane((B.cluster_home[cl], int(cl.rsplit("_C", 1)[1])), *B.coords[p])
 
     # ── chain 2: zones, demand, sourcing, last mile ──
     dem = B.demand.copy()
@@ -242,9 +273,12 @@ def build(B, sc, chain1):
     pairs = {(s, z) for z, srcs in sources.items() for s in srcs}
     zone_products = dem.groupby("customername").product.unique().to_dict()
     for s, z in sorted(pairs):
+        rt = zone_route(s, z)
+        how = " (STEM)" if rt is None else (" — run route" if s == B.zone_home[z] else
+                                     " — zone's stops + estimated stem")
         for prod in zone_products.get(z, []):
             lane(s, z, prod, D["LASTMILE_MODE"], "Prorate", D["LASTMILE_SPEED_KMH"],
-                 "last mile: PDC -> zone (STEM)")
+                 f"last mile: PDC -> zone{how}", route=rt)
 
     # inbound: one supplier per origin, able to feed every usable PDC
     for o, node in sorted(B.origin_node.items()):
@@ -297,7 +331,7 @@ def build(B, sc, chain1):
                     rows["ProcurementPolicies"].append(dict(facilityname=p, productname=prod,
                                                             sourcename=cl, status="Include"))
                     lane(cl, p, prod, D["PICKUP_MODE"], "Prorate", D["LASTMILE_SPEED_KMH"],
-                         "pickup: cluster -> PDC")
+                         "pickup: cluster -> PDC", route=pickup_route(p, cl))
         # onward sinks, floored so the pickup supply (a ceiling) always covers them
         for cls, split in B.onward.items():
             tot = pk[pk.cls == cls].qty.sum()
@@ -351,6 +385,9 @@ def build(B, sc, chain1):
         assert j.transportdistance_base.notna().all(), "an S0 lane has no baseline twin"
         assert (j.transportdistance == j.transportdistance_base).all() and \
                (j.fixedcost == j.fixedcost_base).all(), "S0 last-mile lanes differ from baseline"
+        if B.lm_routes:
+            assert (j.transporttime == j.transporttime_base).all(), \
+                "S0 last-mile hours differ from baseline"
     banner(log, name, sc.notes[:60])
     kv(log, "delivery zones", len(B.zone_home))
     kv(log, "delivery demand, EA", int(dem.qty.sum()),
@@ -359,6 +396,10 @@ def build(B, sc, chain1):
         kv(log, "chain 1 onward demand, EA", int(c1_total), "pickup at the collecting PDCs")
     kv(log, "products", len(products))
     kv(log, "lanes", len(tp))
+    kv(log, "last-mile basis", "route" if B.lm_routes else "haversine",
+       "routing run van: road stem + stops" if B.lm_routes else "one-way straight line")
+    if chain1:
+        kv(log, "pickup basis", "route" if B.pk_routes else "haversine")
     zones_now = pd.Series(B.zone_home).value_counts()
     table(log, ["facility", "status", "baseline zones", "delivery cap", "handling $/EA"],
           [[p, status[p], int(zones_now.get(p, 0)),
