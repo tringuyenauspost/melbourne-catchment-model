@@ -12,6 +12,12 @@ the journey is cut off at the parcel's final arrival at the site that delivered 
 whose only building WAS that site has nothing left to draw and lands at 0. Read it as "took it in
 and delivered it itself", and it is the biggest single bucket for the StarTrack sites.
 
+ONE BUILDING, TWO NAMES. TULLAMARINE PARCEL FACILITY and TULLAMARINE PDC are folded into one
+building HERE (user, 2026-09-29) — nowhere upstream, because the shared alias table deliberately
+keeps them apart for the model and the Sankeys. Without the fold, TPF is the last stop before
+Tullamarine PDC on most of that site's freight, and every one of those parcels counts one extra
+touch (53% at 2 touches instead of 1). See `SAME_BUILDING` and `fold()`.
+
 Run:  uv run python utilities/site_touch_profile.py
       uv run python utilities/site_touch_profile.py --top 20
       uv run python utilities/site_touch_profile.py --paths outputs/path_census_vic/paths.csv
@@ -23,6 +29,36 @@ import pandas as pd
 
 DEFAULT = "outputs/path_census_sankey/paths.csv"
 BUCKETS = ["0", "1", "2", "3", "4+"]
+NOTHING = "(nothing drawn — delivered by the first building it was seen in)"   # path_census's own
+SEP = " > "
+# scan name -> the building it is counted as. Add a pair here to treat two sites as one.
+SAME_BUILDING = {"TULLAMARINE PARCEL FACILITY": "TULLAMARINE PDC"}
+
+
+def fold(paths, site):
+    """Re-derive each journey with SAME_BUILDING applied, then regroup identical journeys.
+
+    paths.csv is the DRAWN scope: the path stops at the parcel's final arrival at its delivering
+    site, so that arrival is not in it. Renaming can put the site at the END of the path (TPF was
+    the last stop before Tullamarine PDC) — that is the same final arrival seen under its other
+    name, so the trailing run is dropped. A site name left EARLIER in the path is a real earlier
+    visit, which is exactly path_census's `circular` test in the drawn scope.
+    """
+    def one(path, dest):
+        if not isinstance(path, str) or path.startswith("("):
+            return ()
+        b = [SAME_BUILDING.get(x, x) for x in path.split(SEP)]
+        b = [x for i, x in enumerate(b) if not i or b[i - 1] != x]    # consecutive repeats out
+        while b and b[-1] == dest:
+            b.pop()
+        return tuple(b)
+
+    new = [one(p, d) for p, d in zip(paths.path, paths[site])]
+    out = paths.assign(path=[SEP.join(b) or NOTHING for b in new],
+                       buildings=[len(b) for b in new],
+                       circular=["yes" if d in b else "no" for b, d in zip(new, paths[site])])
+    return (out.groupby([site, "path", "buildings", "circular"], as_index=False)
+            .articles.sum())
 
 
 def bucket(n):
@@ -44,6 +80,10 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     paths = pd.read_csv(src)
     site = paths.columns[-1]            # 'site' on the new extract, 'depot' on the old one
+    before = paths.groupby(site).apply(lambda g: (g.buildings * g.articles).sum() / g.articles.sum())
+    paths = fold(paths, site)
+    after = paths.groupby(site).apply(lambda g: (g.buildings * g.articles).sum() / g.articles.sum())
+    moved = (after - before).round(2)
     day = paths.articles.sum()
 
     # ── 1. the sites, biggest first — this is what "top 10" is chosen on ──────────────
@@ -101,6 +141,11 @@ def main():
         print(f"  {s:<{w}}{int(r.total_volume):>10,}"
               + "".join(f"{int(r[b]):>10,}" for b in BUCKETS)
               + "   " + "".join(f"{r[f'{b}_pct']:>6.1f}%" for b in BUCKETS))
+    shown = [s for s in top if moved.get(s, 0)]
+    print(f"\n  SAME_BUILDING fold ({', '.join(f'{k} = {v}' for k, v in SAME_BUILDING.items())}) "
+          f"moved {int((moved != 0).sum()):,} sites' mean touches; in this table:")
+    for s in shown:
+        print(f"    {s:<{w}}{before[s]:>6.2f} -> {after[s]:.2f}")
     rest = day - int(prof.total_volume.sum())
     print(f"\n  these {args.top} sites carry {int(prof.total_volume.sum()):,} of {day:,} articles "
           f"({100 * prof.total_volume.sum() / day:.1f}%); {rest:,} ride the other "
