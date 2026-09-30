@@ -1,4 +1,4 @@
-"""The routing runs' own distance and time for a cluster's van — read once, for s2a, s2b and s4a.
+"""The routing runs' own distance and time for a cluster's van — read once, by every lane builder.
 
 A delivery zone (chain 2) and a pickup cluster (chain 1) are each ONE van route in the routing
 run that made them — 1,046 delivery routes, 931 pickup routes, one per cluster — and the run
@@ -23,7 +23,7 @@ WHAT A LANE GETS (basis `route`):
 
 THE STEM DEPENDS ON THE BUILDING; THE STOPS DO NOT. When the lane starts at the building the run
 routed from (within MATCH_KM), both halves are the run's own. When it starts ANYWHERE ELSE — a
-scenario moving a zone to another PDC, or a transport service's truck going straight to a hub —
+zone served from another PDC, or a transport service's truck going straight to a hub —
 the run never drove it, so the stem is estimated from the straight line to the centroid at the
 run's own median road factor (km and minutes per straight-line km, calibrated per run). The
 cluster's stops are its own either way.
