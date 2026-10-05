@@ -1,4 +1,4 @@
-"""Future delivery demand: today's delivery points at the target facilities, grown to FY42.
+"""Future delivery demand: today's delivery points at every facility, grown to FY42.
 
 THE STEPS, in the order the run reports them:
 
@@ -9,9 +9,10 @@ THE STEPS, in the order the run reports them:
      Parcel Post; StarTrack is not ours and is dropped. A row with no FY-from volume, or a
      NEGATIVE volume in either year (Geelong 3213 and 3331 from FY27), gives no ratio.
      Written to outputs/future_demand/postcode_growth.csv.
-  2  FILTER. Delivery points are kept at the target facilities only (--facilities, matched
-     on Terminating_facility_name by substring, case-insensitive; `all` keeps every one).
-     --other-facilities keep holds the rest at factor 1.0 instead of dropping them.
+  2  FACILITIES. Every facility in melbourne_catchment.csv is kept and grown (the default,
+     --facilities all). To narrow it, name facilities (matched on Terminating_facility_name
+     by substring, case-insensitive); --other-facilities then drops the rest, or keeps them
+     at factor 1.0.
   3  ALIGNMENT + TODAY. How many of the delivery postcodes the growth sheet covers, per
      product group, and today's Product_type and parcel_count distributions.
   4  SCALE. Each growth cell (facility, postcode, product group) gets n x growth rows, kept
@@ -71,7 +72,7 @@ KEY = [FAC, PC, GRP]
 GROUPS = ["Express Post", "Parcel Post"]
 EXPRESS_PRODUCTS = {"eParcel Express"}
 # our Terminating_facility_name values to keep and grow (substring match, case-insensitive)
-FACILITIES = ["Tullamarine PDC", "Darebin", "Sunshine West", "Abbotsford", "Oakleigh South"]
+FACILITIES = ["all"]
 BOUND = ["Product_type@facility", "parcel_count@total"]
 SCOPES = {"total": [], "group": [GRP], "facility": [FAC, GRP]}
 
@@ -336,12 +337,12 @@ def main():
                               min=("growth", "min"), max=("growth", "max"))
           .assign(pooled=lambda t: t["v_to"] / t["v_from"]).round(3).to_string())
 
-    section("2 FILTER  delivery points at the target facilities")
+    section("2 FACILITIES  delivery points kept and grown")
     selected = select_facilities(today[FAC].unique(), a.facilities)
     other = ~today[FAC].isin(selected)
-    print(f"target facilities: {sorted(selected)}")
-    print(f"delivery points {len(today):,} -> {(~other).sum():,} at target facilities "
-          f"({other.sum():,} elsewhere: {a.other_facilities})")
+    print(today[today[FAC].isin(selected)].groupby(FAC).size().rename("rows").to_string())
+    print(f"delivery points {len(today):,} -> {(~other).sum():,} at {len(selected)} facilities"
+          + (f" ({other.sum():,} elsewhere: {a.other_facilities})" if other.any() else ""))
     if a.other_facilities == "drop":
         today = today[~other].reset_index(drop=True)
 
