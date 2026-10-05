@@ -163,3 +163,10 @@ temp/
 *.key
 credentials.json
 secrets.json
+
+# ---------------------------------------------------------------
+# PowerPoint decks (and Office lock files) are never committed —
+# one deck exceeded GitHub's 100 MB file limit
+# ---------------------------------------------------------------
+*.pptx
+~$*

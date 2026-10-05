@@ -56,31 +56,42 @@ Built by Macro 4. Chain 1 models the first mile: **pickup → round-0 sort → r
 
 ## 4. From pickup stops to model cells
 
-**Step 1: per-stop file for one day**
-- `utilities/pickup_points.py --per-stop --day 2026-05-18` writes one row per collection: warehouse (site) → pickup address, and vehicle (`red_van` / `white_van`).
+**In one line:** one day of pickup stops is grouped into van rounds, and each round becomes one pickup point (supplier) in the model.
 
-**Step 2: first-mile routing run**
-- Run the RCB routing (OSRM road distances). Current run: `pickup_new_version_2`, 2026-09-29.
-- Vehicle settings:
-  - red_van: 200 parcels, target 19 stops;
-  - white_van: 180 parcels, target 3 stops.
-- It groups each site's stops into **van rounds (clusters)** and writes:
-  - `cluster_summary.csv`: one row per cluster, with its centroid;
-  - `temp_clustered.csv`: one row per stop, with its cluster and site.
-- These files are saved in `inputs/pick_up_cluster/`.
+| Step | What happens | Output |
+|---|---|---|
+| 1. List the stops | Every pickup on Mon 18 May, with its site and vehicle | one row per stop |
+| 2. Group into rounds | The RCB routing run groups each site's stops into van rounds | 663 rounds from 9,378 stops |
+| 3. Build the cells | Each round becomes one supplier at its centre | 663 pickup cells |
 
-**Step 3: chain 1 reads the clusters (`PICKUP_CLUSTERS = pick_up_cluster`) — the only collection basis**
-- One cluster becomes one supplier, `SUP_PKP_<site>_C<k>`, at the cluster centroid.
-- **663 cells:**
-  - Oakleigh South 135
-  - Melbourne Transport 126
-  - Sunshine West 112
-  - Bayswater 92
-  - Dandenong Transport 72
-  - Melbourne North 66
-  - Dandenong South 60
-- Each site's volume is split **equally** across its clusters. A cluster carries no measured volume of its own.
-- Leg-1 distance is the haversine distance from cluster centroid to collecting site. The mean is 11.6 km.
+**What a cell takes from its round**
+- **Location:** the round's centre.
+- **Distance and time for leg 1:** the round's real route, meaning the road drive from the site and back plus the driving between stops.
+
+**What a cell does NOT take from its round**
+- **Volume.** Each site's total (2025 peak × 0.70) is split **equally** across its rounds, so a busy round and a quiet round collect the same amount.
+
+**Rounds per site**
+
+| Site | Rounds |
+|---|---|
+| Oakleigh South | 135 |
+| Melbourne Transport | 126 |
+| Sunshine West | 112 |
+| Bayswater | 92 |
+| Dandenong Transport | 72 |
+| Melbourne North | 66 |
+| Dandenong South | 60 |
+| **Total** | **663** |
+
+<details>
+<summary>How to re-run it</summary>
+
+1. `utilities/pickup_points.py --per-stop --day 2026-05-18` writes the stop list (site → address, `red_van` / `white_van`).
+2. Run RCB routing on it (OSRM road distances). Vehicle settings: red_van 200 parcels / 19 stops, white_van 180 parcels / 3 stops. Save `cluster_summary.csv` and `temp_clustered.csv` to `inputs/pick_up_cluster/`. The current run is `pickup_new_version_2` (2026-09-29).
+3. Rebuild Macro 4. It reads the folder named by `PICKUP_CLUSTERS` and makes one supplier `SUP_PKP_<site>_C<k>` per round. Leg 1 uses the round's route (`PICKUP_ROUTE_BASIS = route`); `haversine` restores the old straight-line distance.
+
+</details>
 
 ---
 
