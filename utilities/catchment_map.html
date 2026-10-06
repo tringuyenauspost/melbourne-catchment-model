@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catchment Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+    --accent: #2f5fd0; --hover: #f1f1ec; --sel: #eaf0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161615; --panel: #1f1f1d; --ink: #ecece8; --muted: #9a9a94; --line: #33332f;
+      --accent: #7ea2ff; --hover: #2a2a27; --sel: #22304f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display: grid; grid-template-columns: 460px 1fr; height: 100%; }
+  #side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #side header { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 12px; word-break: break-all; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .kpi .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  .controls label { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  button { cursor: pointer; }
+  button:hover { background: var(--hover); }
+  #tableWrap { overflow-y: auto; overflow-x: hidden; flex: 1; min-height: 0; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { position: sticky; top: 0; background: var(--panel); text-align: right; font-weight: 600; color: var(--muted);
+    font-size: 11px; padding: 8px 5px; border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; padding-left: 16px; }
+  th:last-child, td:last-child { padding-right: 16px; }
+  th.sorted { color: var(--ink); }
+  td { text-align: right; padding: 6px 5px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr.sel { background: var(--sel); }
+  tbody tr.dim td { opacity: .45; }
+  td.name { white-space: normal; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 7px; vertical-align: -1px; }
+  tfoot td { font-weight: 600; border-top: 1px solid var(--line); border-bottom: none; }
+  .hint { color: var(--muted); font-size: 11px; padding: 8px 16px 12px; border-top: 1px solid var(--line); }
+  #map { height: 100%; background: var(--bg); }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2000;
+    background: color-mix(in srgb, var(--bg) 82%, transparent); pointer-events: none; opacity: 0; transition: opacity .12s; }
+  #drop.show, #drop.empty { opacity: 1; pointer-events: auto; }
+  #drop .box { border: 2px dashed var(--accent); border-radius: 14px; padding: 36px 44px; background: var(--panel); text-align: center; max-width: 440px; }
+  #drop .box b { font-size: 16px; display: block; margin-bottom: 6px; }
+  #drop .box p { color: var(--muted); margin: 6px 0 14px; }
+  .fac-badge { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 50%;
+    border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); color: #fff; font: 700 11px system-ui; }
+  .fac-badge.off { opacity: .35; }
+  .leaflet-tooltip { font: 12px system-ui; }
+  #tip { position: fixed; z-index: 1500; display: none; pointer-events: none; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18); padding: 8px 10px; max-width: 320px; font-size: 12px; }
+  #tip .lab { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  #tip .cid { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  #tip .more { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+  #tip .row { margin-top: 4px; }
+  #tip .muted, .pt-pop .muted { color: var(--muted); }
+  .pt-pop .leaflet-popup-content-wrapper, .pt-pop .leaflet-popup-tip { background: var(--panel); color: var(--ink); border-radius: 8px; }
+  .pt-pop .leaflet-popup-content { margin: 10px 12px; font-size: 12px; line-height: 1.4; }
+  .pt-pop .lab { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin: 0 14px 2px 0; }
+  .pt-pop .ids { max-height: 220px; overflow-y: auto; user-select: text; }
+  .pt-pop .cid { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  .pt-pop .more { color: var(--muted); font-size: 11px; }
+  .pt-pop .row { margin-top: 4px; }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 50% 50%; }
+    #side { order: 2; border-right: none; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <header>
+      <h1>Catchment map</h1>
+      <div class="sub" id="fileName">No file loaded — drop a CSV anywhere</div>
+    </header>
+    <div class="kpis">
+      <div class="kpi"><div class="v" id="kFac">–</div><div class="l">Facilities</div></div>
+      <div class="kpi"><div class="v" id="kPts">–</div><div class="l">Delivery points</div></div>
+      <div class="kpi"><div class="v" id="kPar">–</div><div class="l">Parcels</div></div>
+    </div>
+    <div class="controls">
+      <label>Product <select id="prod"><option value="">All</option></select></label>
+      <label>Size <input id="size" type="range" min="1" max="6" step="0.5" value="2.5"></label>
+      <button id="showAll">Show all</button>
+      <button id="pick">Open CSV…</button>
+    </div>
+    <div id="tableWrap">
+      <table>
+        <thead><tr>
+          <th data-k="name">Facility</th>
+          <th data-k="pts">Points</th>
+          <th data-k="par">Parcels</th>
+          <th data-k="share">Share</th>
+          <th data-k="avg" title="Mean straight-line distance from facility to delivery point, parcel-weighted">Avg km</th>
+          <th data-k="p90" title="90th percentile straight-line distance, parcel-weighted">P90 km</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div>
+    <div class="hint">Click a facility (row or map badge) to show only its deliveries; click it again to show all. Cmd/Ctrl/Shift-click to add or remove facilities.</div>
+  </aside>
+  <div id="map"></div>
+</div>
+<div id="drop" class="empty">
+  <div class="box">
+    <b>Drop a catchment CSV</b>
+    <p>Needs delivery lat/lon and a terminating facility column (e.g. <code>Del_Lat</code>, <code>Del_Long</code>, <code>Terminating_facility_name</code>). Parcel count and facility coordinates are used when present.</p>
+    <button id="pick2">Choose file…</button>
+  </div>
+</div>
+<div id="tip"></div>
+<input id="file" type="file" accept=".csv,text/csv" hidden>
+
+<script>
+const PALETTE = ["#2f6fdf","#e8590c","#2b9a3e","#c2255c","#7048e8","#0c8599","#d9a400","#8f5b3a",
+                 "#e64980","#5c940d","#1864ab","#a61e4d","#495057","#f76707","#0ca678","#9c36b5"];
+const colourFor = i => i < PALETTE.length ? PALETTE[i] : `hsl(${(i * 137.508) % 360} 65% 48%)`;
+
+const COLS = {
+  lat:  ["del_lat","delivery_lat","lat","latitude","y"],
+  lon:  ["del_long","del_lon","delivery_lon","delivery_long","lon","lng","long","longitude","x"],
+  fac:  ["terminating_facility_name","facility_name","facility","terminating_facility","depot"],
+  flat: ["terminating_lat","wh_lat","facility_lat"],
+  flon: ["terminating_long","terminating_lon","wh_lon","facility_lon","facility_long"],
+  cnt:  ["parcel_count","article_count","parcels","articles","count","volume"],
+  prod: ["product_type","product"],
+  con:  ["consignment_id","consignment","consignment_no","con_id","connote"],
+  pc:   ["postcode","post_code","del_postcode"],
+};
+function findCol(fields, keys) {
+  const low = fields.map(f => f.trim().toLowerCase());
+  for (const k of keys) { const i = low.indexOf(k); if (i >= 0) return fields[i]; }
+  return null;
+}
+
+// ---------- state ----------
+let D = null;            // {n, lat, lon, wx, wy, fac, cnt, prod, facs:[{name,lat,lon,colour}], prods:[]}
+let selected = new Set();
+let prodFilter = -1;
+let sortKey = "par", sortDir = -1;
+let stats = [];
+let markers = [];
+
+// ---------- map ----------
+const map = L.map("map", { preferCanvas: true, zoomControl: true }).setView([-30, 145], 5);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 16, attribution: "Tiles &copy; Esri"
+}).addTo(map);
+map.createPane("pts").style.zIndex = 450;
+const canvas = L.DomUtil.create("canvas", "", map.getPane("pts"));
+canvas.style.pointerEvents = "none";
+const ctx = canvas.getContext("2d");
+
+function worldX(lon) { return (lon + 180) / 360 * 256; }
+function worldY(lat) {
+  const s = Math.sin(Math.max(-85, Math.min(85, lat)) * Math.PI / 180);
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256;
+}
+
+function draw() {
+  const size = map.getSize(), dpr = window.devicePixelRatio || 1;
+  canvas.width = size.x * dpr; canvas.height = size.y * dpr;
+  canvas.style.width = size.x + "px"; canvas.style.height = size.y + "px";
+  L.DomUtil.setPosition(canvas, map.containerPointToLayerPoint([0, 0]));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size.x, size.y);
+  if (!D) return;
+  const z = map.getZoom(), sc = Math.pow(2, z);
+  const tl = map.project(map.containerPointToLatLng([0, 0]), z);
+  const r = +document.getElementById("size").value * (z >= 13 ? 1.4 : z <= 8 ? 0.7 : 1);
+  const all = selected.size === 0;
+  ctx.globalAlpha = all ? 0.55 : 0.75;
+  hit.n = 0; hit.grid = null; hit.r = r;
+  // draw big facilities first so small ones stay visible on top
+  const order = D.facs.map((_, i) => i).sort((a, b) => D.byFac[b].length - D.byFac[a].length);
+  for (const f of order) {
+    if (!all && !selected.has(f)) continue;
+    ctx.fillStyle = D.facs[f].colour;
+    ctx.beginPath();
+    const idx = D.byFac[f];
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k];
+      if (prodFilter >= 0 && D.prod[i] !== prodFilter) continue;
+      const x = D.wx[i] * sc - tl.x, y = D.wy[i] * sc - tl.y;
+      if (x < -r || y < -r || x > size.x + r || y > size.y + r) continue;
+      const rr = D.cnt[i] > 1 ? r * Math.min(2, 1 + Math.log2(D.cnt[i]) * 0.35) : r;
+      hit.i[hit.n] = i; hit.x[hit.n] = x; hit.y[hit.n] = y; hit.n++;
+      if (rr < 2.2) ctx.rect(x - rr, y - rr, rr * 2, rr * 2);
+      else { ctx.moveTo(x + rr, y); ctx.arc(x, y, rr, 0, 6.2832); }
+    }
+    ctx.fill();
+  }
+}
+let raf = 0;
+const redraw = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); }); };
+map.on("move resize", redraw);
+map.on("zoomstart", () => { canvas.style.visibility = "hidden"; hit.n = 0; hit.grid = null; hideTip(); });
+map.on("zoomend", () => { canvas.style.visibility = ""; draw(); });
+
+// ---------- load ----------
+function loadFile(file) {
+  document.getElementById("fileName").textContent = "Reading " + file.name + "…";
+  Papa.parse(file, {
+    header: true, skipEmptyLines: true,
+    complete: res => {
+      try { ingest(res.data, res.meta.fields || [], file.name); }
+      catch (e) { alert(e.message); document.getElementById("fileName").textContent = "Failed: " + e.message; }
+    },
+    error: e => alert("Could not read file: " + e.message),
+  });
+}
+
+function ingest(rows, fields, name) {
+  const c = {}; for (const k in COLS) c[k] = findCol(fields, COLS[k]);
+  if (!c.lat || !c.lon || !c.fac)
+    throw new Error("Need lat, lon and facility columns. Found: " + fields.join(", "));
+  const n0 = rows.length;
+  const lat = new Float64Array(n0), lon = new Float64Array(n0), cnt = new Float32Array(n0);
+  const fac = new Uint16Array(n0), prod = new Int16Array(n0);
+  const con = c.con ? new Array(n0) : null, pc = c.pc ? new Array(n0) : null;
+  const facIdx = new Map(), facs = [], prodIdx = new Map(), prods = [];
+  let n = 0, skipped = 0;
+  for (const row of rows) {
+    const la = parseFloat(row[c.lat]), lo = parseFloat(row[c.lon]);
+    if (!isFinite(la) || !isFinite(lo) || (la === 0 && lo === 0)) { skipped++; continue; }
+    const fn = (row[c.fac] || "(blank)").trim() || "(blank)";
+    let fi = facIdx.get(fn);
+    if (fi === undefined) { fi = facs.length; facIdx.set(fn, fi); facs.push({ name: fn, lat: NaN, lon: NaN }); }
+    const F = facs[fi];
+    if (isNaN(F.lat) && c.flat && c.flon) {
+      const a = parseFloat(row[c.flat]), b = parseFloat(row[c.flon]);
+      if (isFinite(a) && isFinite(b) && !(a === 0 && b === 0)) { F.lat = a; F.lon = b; }
+    }
+    let pi = -1;
+    if (c.prod) {
+      const pn = (row[c.prod] || "(blank)").trim() || "(blank)";
+      pi = prodIdx.get(pn);
+      if (pi === undefined) { pi = prods.length; prodIdx.set(pn, pi); prods.push(pn); }
+    }
+    const ct = c.cnt ? parseFloat(row[c.cnt]) : 1;
+    lat[n] = la; lon[n] = lo; fac[n] = fi; prod[n] = pi; cnt[n] = isFinite(ct) ? ct : 1;
+    if (con) con[n] = (row[c.con] || "").trim();
+    if (pc) pc[n] = (row[c.pc] || "").trim();
+    n++;
+  }
+  if (!n) throw new Error("No rows with valid coordinates.");
+  const wx = new Float64Array(n), wy = new Float64Array(n);
+  const byFacArr = facs.map(() => []);
+  for (let i = 0; i < n; i++) { wx[i] = worldX(lon[i]); wy[i] = worldY(lat[i]); byFacArr[fac[i]].push(i); }
+  // facilities without coordinates: place at median of their deliveries
+  facs.forEach((F, f) => {
+    if (isNaN(F.lat)) {
+      const la = byFacArr[f].map(i => lat[i]).sort((a, b) => a - b), lo = byFacArr[f].map(i => lon[i]).sort((a, b) => a - b);
+      F.lat = la[la.length >> 1]; F.lon = lo[lo.length >> 1]; F.estimated = true;
+    }
+  });
+  // colour by size so the biggest facilities get the most distinct colours
+  facs.map((F, i) => i).sort((a, b) => byFacArr[b].length - byFacArr[a].length)
+      .forEach((f, rank) => facs[f].colour = colourFor(rank));
+  // distance of each point to its facility (km)
+  const dist = new Float32Array(n);
+  for (let i = 0; i < n; i++) dist[i] = haversine(lat[i], lon[i], facs[fac[i]].lat, facs[fac[i]].lon);
+
+  D = { n, lat, lon, wx, wy, fac, cnt, prod, dist, facs, prods, con, pc, byFac: byFacArr.map(a => Uint32Array.from(a)) };
+  hit.i = new Uint32Array(n); hit.x = new Float32Array(n); hit.y = new Float32Array(n);
+  selected = new Set(); prodFilter = -1;
+
+  const ps = document.getElementById("prod");
+  ps.innerHTML = '<option value="-1">All</option>' + prods.map((p, i) => `<option value="${i}">${esc(p)}</option>`).join("");
+  ps.disabled = !prods.length;
+
+  document.getElementById("fileName").textContent =
+    `${name} · ${n.toLocaleString()} rows` + (skipped ? ` · ${skipped.toLocaleString()} skipped (no coords)` : "") +
+    (c.cnt ? "" : " · no count column, each row = 1 parcel") +
+    (c.con ? "" : " · no consignment ID column");
+  document.getElementById("drop").classList.remove("empty");
+  buildMarkers();
+  refresh(true);
+}
+
+function haversine(a1, o1, a2, o2) {
+  const R = 6371, t = Math.PI / 180, dA = (a2 - a1) * t, dO = (o2 - o1) * t;
+  const h = Math.sin(dA / 2) ** 2 + Math.cos(a1 * t) * Math.cos(a2 * t) * Math.sin(dO / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+const fmt = v => Math.round(v).toLocaleString();
+function initials(name) {
+  const w = name.replace(/\b(PDC|PARCEL|DELIVERY|FACILITY|DC|CENTRE|CENTER)\b/gi, "").trim().split(/\s+/).filter(Boolean);
+  return ((w[0] || name)[0] + (w[1] ? w[1][0] : (w[0] || "")[1] || "")).toUpperCase();
+}
+
+// ---------- stats ----------
+function computeStats() {
+  const S = D.facs.map((F, f) => ({ f, name: F.name, pts: 0, par: 0, avg: 0, p90: 0 }));
+  let totPts = 0, totPar = 0;
+  for (const s of S) {
+    const idx = D.byFac[s.f], ds = [];
+    let wsum = 0;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k];
+      if (prodFilter >= 0 && D.prod[i] !== prodFilter) continue;
+      s.pts++; s.par += D.cnt[i]; wsum += D.dist[i] * D.cnt[i]; ds.push(i);
+    }
+    s.avg = s.par ? wsum / s.par : NaN;
+    s.p90 = s.par ? weightedPct(ds, 0.9, s.par) : NaN;
+    totPts += s.pts; totPar += s.par;
+  }
+  for (const s of S) s.share = totPar ? s.par / totPar : 0;
+  return { S, totPts, totPar };
+}
+function weightedPct(idx, q, tot) {
+  idx.sort((a, b) => D.dist[a] - D.dist[b]);
+  let acc = 0;
+  for (const i of idx) { acc += D.cnt[i]; if (acc >= q * tot) return D.dist[i]; }
+  return D.dist[idx[idx.length - 1]];
+}
+
+function refresh(fit) {
+  const { S, totPts, totPar } = computeStats();
+  stats = S;
+  const sel = selected.size ? S.filter(s => selected.has(s.f)) : S;
+  const sPts = sel.reduce((a, s) => a + s.pts, 0), sPar = sel.reduce((a, s) => a + s.par, 0);
+  document.getElementById("kFac").textContent = selected.size ? `${selected.size} / ${S.length}` : S.length;
+  document.getElementById("kPts").textContent = fmt(sPts);
+  document.getElementById("kPar").textContent = fmt(sPar);
+  renderTable(totPts, totPar);
+  markers.forEach((m, f) => {
+    const on = !selected.size || selected.has(f);
+    m.getElement()?.querySelector(".fac-badge")?.classList.toggle("off", !on);
+    m.setZIndexOffset(on ? 1000 : 0);
+    const s = S[f];
+    m.setTooltipContent(`<b>${esc(s.name)}</b>${D.facs[f].estimated ? " <i>(location estimated)</i>" : ""}<br>` +
+      `${fmt(s.pts)} points · ${fmt(s.par)} parcels (${(s.share * 100).toFixed(1)}%)<br>avg ${s.avg.toFixed(1)} km · P90 ${s.p90.toFixed(1)} km`);
+  });
+  if (fit) fitTo(selected.size ? [...selected] : D.facs.map((_, i) => i));
+  draw();
+}
+
+function renderTable(totPts, totPar) {
+  const rows = stats.slice().sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey];
+    return (typeof x === "string" ? x.localeCompare(y) : (x - y || 0)) * sortDir;
+  });
+  document.getElementById("rows").innerHTML = rows.map(s => {
+    const cls = selected.has(s.f) ? "sel" : selected.size ? "dim" : "";
+    return `<tr data-f="${s.f}" class="${cls}"><td class="name"><span class="sw" style="background:${D.facs[s.f].colour}"></span>${esc(s.name)}</td>` +
+      `<td>${fmt(s.pts)}</td><td>${fmt(s.par)}</td><td>${(s.share * 100).toFixed(1)}%</td>` +
+      `<td>${isNaN(s.avg) ? "–" : s.avg.toFixed(1)}</td><td>${isNaN(s.p90) ? "–" : s.p90.toFixed(1)}</td></tr>`;
+  }).join("");
+  document.getElementById("foot").innerHTML =
+    `<tr><td>Total</td><td>${fmt(totPts)}</td><td>${fmt(totPar)}</td><td>100%</td><td></td><td></td></tr>`;
+  document.querySelectorAll("th").forEach(th => th.classList.toggle("sorted", th.dataset.k === sortKey));
+}
+
+function fitTo(fs) {
+  let a = 90, b = -90, c = 180, d = -180;
+  for (const f of fs) {
+    const idx = D.byFac[f];
+    // trim 1% each side so a stray geocode doesn't zoom the map out to the continent
+    const la = [], lo = [];
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k];
+      if (prodFilter >= 0 && D.prod[i] !== prodFilter) continue;
+      la.push(D.lat[i]); lo.push(D.lon[i]);
+    }
+    if (!la.length) continue;
+    la.sort((x, y) => x - y); lo.sort((x, y) => x - y);
+    const q = v => v[Math.floor((v.length - 1) * 0.01)], Q = v => v[Math.ceil((v.length - 1) * 0.99)];
+    a = Math.min(a, q(la), D.facs[f].lat); b = Math.max(b, Q(la), D.facs[f].lat);
+    c = Math.min(c, q(lo), D.facs[f].lon); d = Math.max(d, Q(lo), D.facs[f].lon);
+  }
+  if (a <= b) map.fitBounds([[a, c], [b, d]], { padding: [30, 30], animate: false });
+}
+
+function buildMarkers() {
+  markers.forEach(m => m.remove());
+  markers = D.facs.map((F, f) => {
+    const icon = L.divIcon({ className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+      html: `<div class="fac-badge" style="background:${F.colour}">${esc(initials(F.name))}</div>` });
+    return L.marker([F.lat, F.lon], { icon, riseOnHover: true })
+      .bindTooltip("", { direction: "top", offset: [0, -12] })
+      .on("click", e => toggleFac(f, e.originalEvent))
+      .addTo(map);
+  });
+}
+
+function toggleFac(f, ev) {
+  const multi = ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey);
+  if (multi) selected.has(f) ? selected.delete(f) : selected.add(f);
+  else if (selected.size === 1 && selected.has(f)) selected.clear();
+  else selected = new Set([f]);
+  refresh(true);
+}
+
+// ---------- hover ----------
+// screen positions of the points drawn last frame, bucketed into a pixel grid on first hover
+const hit = { n: 0, i: null, x: null, y: null, r: 2, grid: null };
+const CELL = 12, MAX_LIST = 8;
+function buildGrid() {
+  const size = map.getSize(), cols = Math.ceil(size.x / CELL) + 2, rows = Math.ceil(size.y / CELL) + 2;
+  const cellOf = k => (Math.floor(hit.y[k] / CELL) + 1) * cols + Math.floor(hit.x[k] / CELL) + 1;
+  const start = new Uint32Array(cols * rows + 1), items = new Uint32Array(hit.n);
+  for (let k = 0; k < hit.n; k++) start[cellOf(k) + 1]++;
+  for (let c = 0; c < cols * rows; c++) start[c + 1] += start[c];
+  const fill = start.slice(0, -1);
+  for (let k = 0; k < hit.n; k++) items[fill[cellOf(k)]++] = k;
+  hit.grid = { cols, rows, start, items };
+}
+function nearest(px, py) {
+  if (!hit.grid) buildGrid();
+  const { cols, rows, start, items } = hit.grid;
+  const reach = Math.max(6, hit.r + 3), cx = Math.floor(px / CELL) + 1, cy = Math.floor(py / CELL) + 1;
+  let best = -1, bd = reach * reach;
+  for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) {
+    if (x < 0 || y < 0 || x >= cols || y >= rows) continue;
+    const c = y * cols + x;
+    for (let j = start[c]; j < start[c + 1]; j++) {
+      const k = items[j], dx = hit.x[k] - px, dy = hit.y[k] - py, d = dx * dx + dy * dy;
+      if (d <= bd) { bd = d; best = k; }   // <= so the last-drawn (top) point wins ties
+    }
+  }
+  if (best < 0) return null;
+  // everything drawn on (essentially) the same pixel: same address, several consignments
+  const bx = hit.x[best], by = hit.y[best], same = [];
+  const c = (Math.floor(by / CELL) + 1) * cols + Math.floor(bx / CELL) + 1;
+  for (let j = start[c]; j < start[c + 1]; j++) {
+    const k = items[j];
+    if (Math.abs(hit.x[k] - bx) < 0.5 && Math.abs(hit.y[k] - by) < 0.5) same.push(hit.i[k]);
+  }
+  return same;
+}
+const tip = document.getElementById("tip");
+function hideTip() { tip.style.display = "none"; }
+function tipHtml(pts, limit) {
+  const i = pts[0], F = D.facs[D.fac[i]];
+  const par = pts.reduce((a, j) => a + D.cnt[j], 0);
+  let h = "";
+  if (D.con) {
+    const ids = `<div class="ids">` + pts.slice(0, limit).map(j => `<div class="cid">${esc(D.con[j] || "(blank)")}</div>`).join("") + `</div>`;
+    const oneSpot = pts.every(j => D.lat[j] === D.lat[i] && D.lon[j] === D.lon[i]);
+    const where = oneSpot ? " at this location" : " at this pixel · zoom in to separate";
+    h += `<div class="lab">${pts.length > 1 ? pts.length.toLocaleString() + " consignments" + where : "Consignment"}</div>${ids}` +
+         (pts.length > limit ? `<div class="more">+${(pts.length - limit).toLocaleString()} more${limit === MAX_LIST ? " · click to see all" : ""}</div>` : "");
+  }
+  const facsHere = [...new Set(pts.map(j => D.fac[j]))];
+  h += `<div class="row"><span class="sw" style="background:${F.colour}"></span>${esc(F.name)}` +
+       (facsHere.length > 1 ? ` <i>+${facsHere.length - 1} other</i>` : "") + `</div>`;
+  const prodsHere = D.prods.length ? [...new Set(pts.map(j => D.prods[D.prod[j]]))] : [];
+  if (prodsHere.length) h += `<div class="row">${esc(prodsHere.slice(0, 3).join(", "))}${prodsHere.length > 3 ? "…" : ""}</div>`;
+  h += `<div class="row muted">${fmt(par)} parcel${par === 1 ? "" : "s"}` +
+       (D.pc && D.pc[i] ? ` · postcode ${esc(D.pc[i])}` : "") + ` · ${D.dist[i].toFixed(1)} km from facility</div>`;
+  if (!D.con) h += `<div class="row muted">No consignment ID column in this file</div>`;
+  return h;
+}
+function showTip(pts, e) {
+  tip.innerHTML = tipHtml(pts, MAX_LIST);
+  tip.style.display = "block";
+  const W = window.innerWidth, H = window.innerHeight, tw = tip.offsetWidth, th = tip.offsetHeight;
+  tip.style.left = Math.min(e.clientX + 14, W - tw - 8) + "px";
+  tip.style.top = (e.clientY + 14 + th > H ? e.clientY - th - 10 : e.clientY + 14) + "px";
+}
+let hoverRaf = 0, lastEv = null;
+map.on("mousemove", e => {
+  lastEv = e;
+  if (hoverRaf) return;
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    if (!D || !hit.n || canvas.style.visibility === "hidden") return hideTip();
+    if (lastEv.originalEvent.target.closest(".leaflet-marker-icon, .leaflet-popup")) return hideTip();
+    const pts = nearest(lastEv.containerPoint.x, lastEv.containerPoint.y);
+    pts ? showTip(pts, lastEv.originalEvent) : hideTip();
+    map.getContainer().style.cursor = pts ? "crosshair" : "";
+  });
+});
+map.on("mouseout movestart", hideTip);
+// click a point: same content as the hover, pinned to the point and selectable, with every consignment listed
+const POPUP_LIST = 500;
+map.on("click", e => {
+  if (!D || !hit.n || canvas.style.visibility === "hidden") return;
+  const pts = nearest(e.containerPoint.x, e.containerPoint.y);
+  if (!pts) return;
+  hideTip();
+  L.popup({ className: "pt-pop", maxWidth: 340, offset: [0, -2], autoPanPadding: [20, 20] })
+    .setLatLng([D.lat[pts[0]], D.lon[pts[0]]])
+    .setContent(tipHtml(pts, POPUP_LIST))
+    .openOn(map);
+});
+
+// ---------- wiring ----------
+document.getElementById("rows").addEventListener("click", e => {
+  const tr = e.target.closest("tr"); if (tr) toggleFac(+tr.dataset.f, e);
+});
+document.querySelector("thead").addEventListener("click", e => {
+  const k = e.target.closest("th")?.dataset.k; if (!k || !D) return;
+  if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === "name" ? 1 : -1; }
+  renderTable(stats.reduce((a, s) => a + s.pts, 0), stats.reduce((a, s) => a + s.par, 0));
+});
+document.getElementById("showAll").onclick = () => { if (!D) return; selected.clear(); refresh(true); };
+document.getElementById("prod").onchange = e => { prodFilter = +e.target.value; refresh(false); };
+document.getElementById("size").oninput = draw;
+const fileIn = document.getElementById("file");
+document.getElementById("pick").onclick = document.getElementById("pick2").onclick = () => fileIn.click();
+fileIn.onchange = () => { if (fileIn.files[0]) loadFile(fileIn.files[0]); fileIn.value = ""; };
+
+const drop = document.getElementById("drop");
+let dragDepth = 0;
+window.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; drop.classList.add("show"); });
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("dragleave", e => { if (--dragDepth <= 0) { dragDepth = 0; drop.classList.remove("show"); } });
+window.addEventListener("drop", e => {
+  e.preventDefault(); dragDepth = 0; drop.classList.remove("show");
+  const f = e.dataTransfer.files[0]; if (f) loadFile(f);
+});
+</script>
+</body>
+</html>
