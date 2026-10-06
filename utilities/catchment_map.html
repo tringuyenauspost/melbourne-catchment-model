@@ -10,12 +10,12 @@
 <style>
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
-    --accent: #2f5fd0; --hover: #f1f1ec; --sel: #eaf0ff;
+    --accent: #2f5fd0; --hover: #f1f1ec; --sel: #eaf0ff; --warn: #b45f00;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #161615; --panel: #1f1f1d; --ink: #ecece8; --muted: #9a9a94; --line: #33332f;
-      --accent: #7ea2ff; --hover: #2a2a27; --sel: #22304f;
+      --accent: #7ea2ff; --hover: #2a2a27; --sel: #22304f; --warn: #f0a24a;
     }
   }
   * { box-sizing: border-box; }
@@ -47,8 +47,19 @@
   tbody tr.sel { background: var(--sel); }
   tbody tr.dim td { opacity: .45; }
   td.name { white-space: normal; }
+  .warn { color: var(--warn); font-weight: 600; margin-left: 6px; cursor: help; }
   .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 7px; vertical-align: -1px; }
   tfoot td { font-weight: 600; border-top: 1px solid var(--line); border-bottom: none; }
+  #conflicts { max-height: 38%; overflow-y: auto; border-top: 1px solid var(--line); padding: 8px 0 4px; }
+  #conflicts[hidden] { display: none; }
+  #conflicts .head { display: flex; align-items: center; justify-content: space-between; padding: 0 16px 4px; }
+  #conflicts .head b { color: var(--warn); font-size: 12px; }
+  #conflicts .head button { font-size: 11px; padding: 2px 8px; }
+  #conflicts .fac { padding: 6px 16px 2px; font-weight: 600; font-size: 12px; }
+  #conflicts table td, #conflicts table th { padding: 3px 5px; font-size: 12px; position: static; cursor: default; }
+  #conflicts tr.used td { font-weight: 600; }
+  #conflicts td.match { color: var(--muted); text-align: left; white-space: normal; }
+  #conflicts input { margin: 0; cursor: pointer; }
   .hint { color: var(--muted); font-size: 11px; padding: 8px 16px 12px; border-top: 1px solid var(--line); }
   #map { height: 100%; background: var(--bg); }
   #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2000;
@@ -113,6 +124,7 @@
         <tfoot id="foot"></tfoot>
       </table>
     </div>
+    <div id="conflicts" hidden></div>
     <div class="hint">Click a facility (row or map badge) to show only its deliveries; click it again to show all. Cmd/Ctrl/Shift-click to add or remove facilities.</div>
   </aside>
   <div id="map"></div>
@@ -243,9 +255,14 @@ function ingest(rows, fields, name) {
     let fi = facIdx.get(fn);
     if (fi === undefined) { fi = facs.length; facIdx.set(fn, fi); facs.push({ name: fn, lat: NaN, lon: NaN }); }
     const F = facs[fi];
-    if (isNaN(F.lat) && c.flat && c.flon) {
+    const ct = c.cnt ? parseFloat(row[c.cnt]) : 1;
+    if (c.flat && c.flon) {
+      // tally every coordinate pair seen for this facility; the one carrying the most parcels wins below
       const a = parseFloat(row[c.flat]), b = parseFloat(row[c.flon]);
-      if (isFinite(a) && isFinite(b) && !(a === 0 && b === 0)) { F.lat = a; F.lon = b; }
+      if (isFinite(a) && isFinite(b) && !(a === 0 && b === 0)) {
+        const k = a + "," + b, t = (F.coords ||= new Map()).get(k) || { lat: a, lon: b, rows: 0, par: 0 };
+        t.rows++; t.par += isFinite(ct) ? ct : 1; F.coords.set(k, t);
+      }
     }
     let pi = -1;
     if (c.prod) {
@@ -253,13 +270,20 @@ function ingest(rows, fields, name) {
       pi = prodIdx.get(pn);
       if (pi === undefined) { pi = prods.length; prodIdx.set(pn, pi); prods.push(pn); }
     }
-    const ct = c.cnt ? parseFloat(row[c.cnt]) : 1;
     lat[n] = la; lon[n] = lo; fac[n] = fi; prod[n] = pi; cnt[n] = isFinite(ct) ? ct : 1;
     if (con) con[n] = (row[c.con] || "").trim();
     if (pc) pc[n] = (row[c.pc] || "").trim();
     n++;
   }
   if (!n) throw new Error("No rows with valid coordinates.");
+  // one location per facility: the pair with the most parcels; the rest are kept as conflicts to flag
+  facs.forEach(F => {
+    if (!F.coords) return;
+    const ranked = [...F.coords.values()].sort((x, y) => y.par - x.par || y.rows - x.rows);
+    F.lat = ranked[0].lat; F.lon = ranked[0].lon;
+    if (ranked.length > 1) { F.conflicts = ranked; F.used = 0; }
+    delete F.coords;
+  });
   const wx = new Float64Array(n), wy = new Float64Array(n);
   const byFacArr = facs.map(() => []);
   for (let i = 0; i < n; i++) { wx[i] = worldX(lon[i]); wy[i] = worldY(lat[i]); byFacArr[fac[i]].push(i); }
@@ -288,7 +312,8 @@ function ingest(rows, fields, name) {
   document.getElementById("fileName").textContent =
     `${name} · ${n.toLocaleString()} rows` + (skipped ? ` · ${skipped.toLocaleString()} skipped (no coords)` : "") +
     (c.cnt ? "" : " · no count column, each row = 1 parcel") +
-    (c.con ? "" : " · no consignment ID column");
+    (c.con ? "" : " · no consignment ID column") +
+    (D.facs.some(F => F.conflicts) ? ` · ⚠ ${D.facs.filter(F => F.conflicts).length} facilities with conflicting coordinates` : "");
   document.getElementById("drop").classList.remove("empty");
   buildMarkers();
   refresh(true);
@@ -341,16 +366,73 @@ function refresh(fit) {
   document.getElementById("kPts").textContent = fmt(sPts);
   document.getElementById("kPar").textContent = fmt(sPar);
   renderTable(totPts, totPar);
+  renderConflicts();
   markers.forEach((m, f) => {
     const on = !selected.size || selected.has(f);
     m.getElement()?.querySelector(".fac-badge")?.classList.toggle("off", !on);
     m.setZIndexOffset(on ? 1000 : 0);
     const s = S[f];
-    m.setTooltipContent(`<b>${esc(s.name)}</b>${D.facs[f].estimated ? " <i>(location estimated)</i>" : ""}<br>` +
+    m.setTooltipContent(`<b>${esc(s.name)}</b>${D.facs[f].estimated ? " <i>(location estimated)</i>" : ""}` +
+      (D.facs[f].conflicts ? `<br><span class="warn" style="margin:0">⚠ ${D.facs[f].conflicts.length} coordinate pairs — see the conflicts panel</span>` : "") + `<br>` +
       `${fmt(s.pts)} points · ${fmt(s.par)} parcels (${(s.share * 100).toFixed(1)}%)<br>avg ${s.avg.toFixed(1)} km · P90 ${s.p90.toFixed(1)} km`);
   });
   if (fit) fitTo(selected.size ? [...selected] : D.facs.map((_, i) => i));
   draw();
+}
+
+function conflictNote(F) {
+  return F.conflicts.map((t, i) => `${t.lat}, ${t.lon} — ${fmt(t.rows)} rows, ${fmt(t.par)} parcels${i === F.used ? " (used)" : ""}`).join("\n");
+}
+
+// what a coordinate pair coincides with: another facility's location, else its distance from the pair in use
+function pairMatch(f, t) {
+  const F = D.facs[f], near = [];
+  D.facs.forEach((G, g) => { if (g !== f && haversine(t.lat, t.lon, G.lat, G.lon) < 0.5) near.push(G.name); });
+  if (near.length) return "location of " + near.join(", ");
+  const d = haversine(t.lat, t.lon, F.lat, F.lon);
+  return d < 0.05 ? "" : `${d.toFixed(1)} km from the pair in use`;
+}
+
+function renderConflicts() {
+  const el = document.getElementById("conflicts");
+  const fs = D.facs.map((F, f) => f).filter(f => D.facs[f].conflicts);
+  el.hidden = !fs.length;
+  if (!fs.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="head"><b>⚠ Coordinate conflicts (${fs.length})</b>` +
+    `<button id="copyConf" title="Copy as a tab-separated table, pastes into Excel">Copy</button></div>` +
+    fs.map(f => {
+      const F = D.facs[f], tot = F.conflicts.reduce((a, t) => a + t.par, 0);
+      return `<div class="fac"><span class="sw" style="background:${F.colour}"></span>${esc(F.name)}</div>` +
+        `<table><thead><tr><th>Use</th><th>Lat, Lon</th><th>Parcels</th><th>Share</th><th>Rows</th><th style="text-align:left">Matches</th></tr></thead><tbody>` +
+        F.conflicts.map((t, i) => `<tr class="${i === F.used ? "used" : ""}">` +
+          `<td><input type="radio" name="cf${f}" data-f="${f}" data-i="${i}"${i === F.used ? " checked" : ""}></td>` +
+          `<td>${t.lat}, ${t.lon}</td><td>${fmt(t.par)}</td><td>${(t.par / tot * 100).toFixed(2)}%</td><td>${fmt(t.rows)}</td>` +
+          `<td class="match">${esc(pairMatch(f, t))}</td></tr>`).join("") +
+        `</tbody></table>`;
+    }).join("");
+}
+
+// move a facility to another of its coordinate pairs: re-measure its deliveries and redraw
+function useConflictPair(f, i) {
+  const F = D.facs[f], t = F.conflicts[i];
+  F.used = i; F.lat = t.lat; F.lon = t.lon;
+  const idx = D.byFac[f];
+  for (let k = 0; k < idx.length; k++) D.dist[idx[k]] = haversine(D.lat[idx[k]], D.lon[idx[k]], F.lat, F.lon);
+  markers[f].setLatLng([F.lat, F.lon]);
+  refresh(false);
+}
+
+function copyConflicts() {
+  const lines = [["Facility", "Lat", "Lon", "Parcels", "Share", "Rows", "Used", "Matches"].join("\t")];
+  D.facs.forEach((F, f) => {
+    if (!F.conflicts) return;
+    const tot = F.conflicts.reduce((a, t) => a + t.par, 0);
+    F.conflicts.forEach((t, i) => lines.push([F.name, t.lat, t.lon, t.par, (t.par / tot * 100).toFixed(2) + "%", t.rows,
+      i === F.used ? "yes" : "", pairMatch(f, t)].join("\t")));
+  });
+  navigator.clipboard.writeText(lines.join("\n")).then(() => {
+    const b = document.getElementById("copyConf"); if (b) { b.textContent = "Copied"; setTimeout(() => b.textContent = "Copy", 1200); }
+  });
 }
 
 function renderTable(totPts, totPar) {
@@ -360,8 +442,9 @@ function renderTable(totPts, totPar) {
   });
   document.getElementById("rows").innerHTML = rows.map(s => {
     const cls = selected.has(s.f) ? "sel" : selected.size ? "dim" : "";
-    return `<tr data-f="${s.f}" class="${cls}"><td class="name"><span class="sw" style="background:${D.facs[s.f].colour}"></span>${esc(s.name)}</td>` +
-      `<td>${fmt(s.pts)}</td><td>${fmt(s.par)}</td><td>${(s.share * 100).toFixed(1)}%</td>` +
+    return `<tr data-f="${s.f}" class="${cls}"><td class="name"><span class="sw" style="background:${D.facs[s.f].colour}"></span>${esc(s.name)}` +
+      (D.facs[s.f].conflicts ? `<span class="warn" title="${esc(D.facs[s.f].conflicts.length + " coordinate pairs in the file:\n" + conflictNote(D.facs[s.f]))}">⚠</span>` : "") +
+      `</td><td>${fmt(s.pts)}</td><td>${fmt(s.par)}</td><td>${(s.share * 100).toFixed(1)}%</td>` +
       `<td>${isNaN(s.avg) ? "–" : s.avg.toFixed(1)}</td><td>${isNaN(s.p90) ? "–" : s.p90.toFixed(1)}</td></tr>`;
   }).join("");
   document.getElementById("foot").innerHTML =
@@ -512,6 +595,10 @@ document.querySelector("thead").addEventListener("click", e => {
   if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === "name" ? 1 : -1; }
   renderTable(stats.reduce((a, s) => a + s.pts, 0), stats.reduce((a, s) => a + s.par, 0));
 });
+document.getElementById("conflicts").addEventListener("change", e => {
+  const r = e.target.closest("input[type=radio]"); if (r) useConflictPair(+r.dataset.f, +r.dataset.i);
+});
+document.getElementById("conflicts").addEventListener("click", e => { if (e.target.id === "copyConf") copyConflicts(); });
 document.getElementById("showAll").onclick = () => { if (!D) return; selected.clear(); refresh(true); };
 document.getElementById("prod").onchange = e => { prodFilter = +e.target.value; refresh(false); };
 document.getElementById("size").oninput = draw;
