@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demand Growth Map</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6b66; --line: #e4e4df;
+    --accent: #2f5fd0; --hover: #f1f1ec; --sel: #eaf0ff; --band: #f3f2ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161615; --panel: #1f1f1d; --ink: #ecece8; --muted: #9a9a94; --line: #33332f;
+      --accent: #7ea2ff; --hover: #2a2a27; --sel: #22304f; --band: #262624;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display: grid; grid-template-columns: 540px 1fr; height: 100%; }
+  #side { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; min-height: 0; }
+  .blk { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  h2 { font-size: 11px; margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+  .bh { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .slots { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .slot { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; min-width: 0; }
+  .slot:hover { background: var(--hover); }
+  .slot b { display: block; font-size: 12px; }
+  .slot span { color: var(--muted); font-size: 11px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slot.ok { border-style: solid; border-color: var(--accent); }
+  .slot.need { border-style: solid; border-color: #b2182b; background: color-mix(in srgb, #b2182b 8%, var(--panel)); }
+  .row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 8px; }
+  .row:first-child { margin-top: 0; }
+  .row > label { color: var(--muted); font-size: 12px; min-width: 56px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; border-right: 1px solid var(--line); }
+  .seg button:last-child { border-right: none; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  select, button { font: inherit; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  button { cursor: pointer; }
+  button.small { font-size: 11px; padding: 2px 8px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .kpi .v { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .kpi .l { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th { text-align: right; font-weight: 600; color: var(--muted); font-size: 11px; padding: 6px 5px; border-bottom: 1px solid var(--line);
+    white-space: nowrap; background: var(--panel); }
+  .scroll th { position: sticky; top: 0; }
+  td { text-align: right; padding: 4px 5px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child, td.wrap { text-align: left; white-space: normal; }
+  th[data-k] { cursor: pointer; user-select: none; }
+  th.sorted { color: var(--ink); }
+  tr.click { cursor: pointer; }
+  tr.click:hover { background: var(--hover); }
+  tr.sel { background: var(--sel); }
+  tr.dim td { opacity: .45; }
+  tr.grp td { background: var(--band); font-weight: 600; }
+  td.ind { padding-left: 18px; }
+  tfoot td { font-weight: 600; border-bottom: none; }
+  .scroll { max-height: 340px; overflow-y: auto; }
+  .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .up { color: #1b7837; } .down { color: #b2182b; }
+  .muted { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  #maps { display: grid; grid-template-columns: 1fr; height: 100%; }
+  #maps.split { grid-template-columns: 1fr 1fr; gap: 2px; background: var(--line); }
+  .map { height: 100%; background: var(--bg); }
+  #map2 { display: none; }
+  #maps.split #map2 { display: block; }
+  .tag { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 800; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; font-weight: 600; box-shadow: 0 1px 4px rgba(0,0,0,.15); pointer-events: none; display: none; }
+  #maps.split .tag { display: block; }
+  .legend { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.15); max-width: 220px; }
+  .legend .t { font-weight: 600; margin-bottom: 4px; }
+  .legend .it { display: flex; align-items: center; gap: 6px; }
+  .legend .bx { width: 14px; height: 12px; border-radius: 2px; flex: none; }
+  .legend .grad { height: 12px; border-radius: 3px; margin: 2px 0; }
+  .legend .ends { display: flex; justify-content: space-between; color: var(--muted); }
+  .fac-badge { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
+    border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); color: #fff; font: 700 10px system-ui; }
+  .fac-badge.off { opacity: .35; }
+  .leaflet-tooltip { font: 12px system-ui; }
+  #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2000;
+    background: color-mix(in srgb, var(--bg) 82%, transparent); pointer-events: none; opacity: 0; transition: opacity .12s; }
+  #drop.show { opacity: 1; }
+  #drop.empty { opacity: 1; pointer-events: auto; }
+  #drop .box { border: 2px dashed var(--accent); border-radius: 14px; padding: 32px 40px; background: var(--panel); text-align: center; max-width: 480px; }
+  #drop .box b { font-size: 16px; display: block; margin-bottom: 6px; }
+  #drop .box p { color: var(--muted); margin: 6px 0 14px; }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: 50% 50%; }
+    #side { order: 2; border-right: none; border-top: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <div class="blk">
+      <h1>Demand growth by postcode</h1>
+      <div class="slots">
+        <div class="slot" id="slotBase"><b>Base CSV</b><span>click or drop — e.g. melbourne_catchment.csv</span></div>
+        <div class="slot" id="slotFut"><b>Future CSV</b><span>click or drop — e.g. future_demand.csv</span></div>
+        <div class="slot" id="slotGeo"><b>Postcode shapes</b><span>AP_Postcodes_simplified.geojson</span></div>
+      </div>
+      <div class="hint" id="loadHint">Drop all three at once: the CSV with an <code>is_synthetic</code> column is the future, a <code>.geojson</code> is the postcode shapes. Or drop / click a box. Shapes come from <code>utilities/convert_postcode_boundaries.py</code>; the map needs them.</div>
+    </div>
+    <div class="blk">
+      <div class="row"><label>Map</label>
+        <span class="seg" id="segView"><button data-v="growth" class="on">Growth ×</button><button data-v="added">Added</button><button data-v="split">Base | Future</button></span></div>
+      <div class="row"><label>Count</label>
+        <span class="seg" id="segMeasure"><button data-v="points" class="on">Delivery points</button><button data-v="parcels">Parcels</button></span></div>
+      <div class="row"><label>Product</label><select id="prod"><option value="all">All products</option></select>
+        <button id="showAll">Show all facilities</button></div>
+    </div>
+    <div class="blk">
+      <div class="kpis">
+        <div class="kpi"><div class="v" id="kBase">–</div><div class="l">Base</div></div>
+        <div class="kpi"><div class="v" id="kFut">–</div><div class="l">Future</div></div>
+        <div class="kpi"><div class="v" id="kGrow">–</div><div class="l">Growth</div></div>
+        <div class="kpi"><div class="v" id="kAdd">–</div><div class="l">Added</div></div>
+      </div>
+      <div class="hint" id="kScope">All facilities · all products</div>
+    </div>
+    <div class="blk">
+      <div class="bh"><h2>Facilities</h2><span class="hint" style="margin:0">click to isolate · Cmd/Ctrl/Shift-click to add</span></div>
+      <table><thead><tr><th>Facility</th><th>Postcodes</th><th>Base</th><th>Future</th><th>Growth</th><th>Added</th></tr></thead>
+        <tbody id="facRows"></tbody><tfoot id="facFoot"></tfoot></table>
+    </div>
+    <div class="blk">
+      <div class="bh"><h2>Facility × product type</h2><button class="small" id="dlFP">Download CSV</button></div>
+      <div class="scroll"><table><thead><tr><th>Product type</th><th>Base</th><th>Future</th><th>Growth</th><th>Base %</th><th>Future %</th><th>Δ pts</th></tr></thead>
+        <tbody id="fpRows"></tbody></table></div>
+      <div class="hint">Shares are within each facility. Not affected by the product filter.</div>
+    </div>
+    <div class="blk">
+      <div class="bh"><h2>Postcodes <span id="pcCount" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2><button class="small" id="dlPC">Download CSV</button></div>
+      <div class="scroll"><table><thead><tr><th data-k="pc">Postcode</th><th data-k="fac" style="text-align:left">Facility</th><th data-k="b">Base</th><th data-k="f">Future</th><th data-k="g">Growth</th><th data-k="d">Added</th></tr></thead>
+        <tbody id="pcRows"></tbody></table></div>
+      <div class="hint">Click a column to sort, a row to find it on the map.</div>
+    </div>
+  </aside>
+  <div id="maps">
+    <div class="map" id="map1"><div class="tag" id="tag1">Base</div></div>
+    <div class="map" id="map2"><div class="tag" id="tag2">Future</div></div>
+  </div>
+</div>
+<div id="drop" class="empty">
+  <div class="box">
+    <b>Drop the base CSV, future CSV and postcode shapes</b>
+    <p>Base CSV, future CSV and the postcode shapes GeoJSON, together or one at a time. The CSVs need delivery lat/lon, <code>Terminating_facility_name</code> and <code>POSTCODE</code>; <code>Product_type</code> and <code>parcel_count</code> are used when present.</p>
+    <button id="pick">Choose files…</button>
+  </div>
+</div>
+<input id="file" type="file" accept=".csv,text/csv,.geojson,.json" multiple hidden>
+
+<script>
+// ---------- constants ----------
+const PALETTE = ["#2f6fdf","#e8590c","#2b9a3e","#c2255c","#7048e8","#0c8599","#d9a400","#8f5b3a",
+                 "#e64980","#5c940d","#1864ab","#a61e4d","#495057","#f76707","#0ca678","#9c36b5"];
+const colourFor = i => i < PALETTE.length ? PALETTE[i] : `hsl(${(i * 137.508) % 360} 65% 48%)`;
+const EXPRESS_PRODUCTS = new Set(["eParcel Express"]);       // -> Express Post, everything else -> Parcel Post
+const GROUPS = ["Express Post", "Parcel Post"];
+const COLS = {
+  lat:  ["del_lat","delivery_lat","lat","latitude"],
+  lon:  ["del_long","del_lon","delivery_lon","delivery_long","lon","lng","longitude"],
+  fac:  ["terminating_facility_name","facility_name","facility"],
+  flat: ["terminating_lat","wh_lat","facility_lat"],
+  flon: ["terminating_long","terminating_lon","wh_lon","facility_lon"],
+  pc:   ["postcode","post_code"],
+  prod: ["product_type","product"],
+  cnt:  ["parcel_count","article_count","parcels","count"],
+  syn:  ["is_synthetic"],
+};
+const GROWTH_BINS = [                       // red = fewer than today, green = more
+  { max: 0.8,      c: "#b2182b", l: "below 0.8" },
+  { max: 0.95,     c: "#ef8a62", l: "0.8 – 0.95" },
+  { max: 1.05,     c: "#e6e6df", l: "0.95 – 1.05 (flat)" },
+  { max: 1.3,      c: "#d9f0d3", l: "1.05 – 1.3" },
+  { max: 1.5,      c: "#a6dba0", l: "1.3 – 1.5" },
+  { max: 1.7,      c: "#5aae61", l: "1.5 – 1.7" },
+  { max: 2.0,      c: "#1b7837", l: "1.7 – 2.0" },
+  { max: Infinity, c: "#00441b", l: "2.0 and above" },
+];
+
+// ---------- state ----------
+const facDict = new Map(), facs = [];       // shared by both files so filters apply to both
+const prodDict = new Map(), prods = [];
+const S = { base: null, fut: null, view: "growth", measure: "points", prod: "all", selected: new Set(),
+            pcCentre: new Map(), cells: [], sortKey: "d", sortDir: -1, layers: new Map(), shapes: null };
+
+const idOf = (dict, list, name, make) => {
+  let i = dict.get(name);
+  if (i === undefined) { i = list.length; dict.set(name, i); list.push(make ? make(name) : name); }
+  return i;
+};
+function findCol(fields, keys) {
+  const low = fields.map(f => f.trim().toLowerCase());
+  for (const k of keys) { const i = low.indexOf(k); if (i >= 0) return fields[i]; }
+  return null;
+}
+const fmt = v => Math.round(v).toLocaleString();
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+const ratio = (f, b) => b ? "×" + (f / b).toFixed(2) : "–";
+const signed = v => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${fmt(v)}</span>`;
+const unit = () => S.measure === "points" ? "delivery points" : "parcels";
+const shortName = name => name.replace(/\s+(PARCEL DELIVERY|PARCEL DELIVERY CENTRE|PDC|DC)$/i, "");
+function initials(name) {
+  const w = name.replace(/\b(PDC|PARCEL|DELIVERY|FACILITY|DC|CENTRE|CENTER)\b/gi, "").trim().split(/\s+/).filter(Boolean);
+  return ((w[0] || name)[0] + (w[1] ? w[1][0] : (w[0] || "")[1] || "")).toUpperCase();
+}
+
+// ---------- load ----------
+const parse = file => new Promise((res, rej) => Papa.parse(file, { header: true, skipEmptyLines: true,
+  complete: r => res({ file, rows: r.data, fields: r.meta.fields || [] }), error: rej }));
+
+async function loadFiles(fileList, forceSlot) {
+  const all = [...fileList];
+  const geo = all.filter(f => /\.(geo)?json$/i.test(f.name) || forceSlot === "geo");
+  const files = all.filter(f => !geo.includes(f) && (/\.csv$/i.test(f.name) || f.type === "text/csv"));
+  for (const g of geo) {
+    try { loadShapes(JSON.parse(await g.text()), g.name); } catch (e) { alert(g.name + ": " + e.message); }
+  }
+  if (!files.length) { if (geo.length) afterLoad(); return; }
+  const hint = document.getElementById("loadHint"), hintHtml = hint.innerHTML;
+  hint.textContent = "Reading " + files.map(f => f.name).join(" + ") + "…";
+  for (const p of await Promise.all(files.map(parse))) {
+    try {
+      const ds = ingest(p.rows, p.fields, p.file.name);
+      const isFut = forceSlot ? forceSlot === "fut" : !!findCol(p.fields, COLS.syn);
+      if (isFut) S.fut = ds; else S.base = ds;
+    } catch (e) { alert(p.file.name + ": " + e.message); }
+  }
+  hint.innerHTML = hintHtml;
+  for (const [id, ds] of [["slotBase", S.base], ["slotFut", S.fut]]) {
+    const el = document.getElementById(id);
+    el.classList.toggle("ok", !!ds);
+    if (ds) el.querySelector("span").textContent = `${ds.name} · ${ds.n.toLocaleString()} rows`;
+  }
+  if (S.base || S.fut) document.getElementById("drop").classList.remove("empty");
+  afterLoad();
+}
+
+function loadShapes(gj, name) {
+  const feats = gj.type === "FeatureCollection" ? gj.features : [gj];
+  const key = feats[0] && Object.keys(feats[0].properties || {}).find(k => /^post_?code$/i.test(k));
+  if (!key) throw new Error("no POSTCODE property on the features");
+  S.shapes = new Map();
+  // a postcode that crosses a state border comes as one feature per state: keep every part
+  for (const f of feats) {
+    const pc = parseInt(f.properties[key], 10);
+    if (!pc || !f.geometry) continue;
+    if (!S.shapes.has(pc)) S.shapes.set(pc, []);
+    S.shapes.get(pc).push(f);
+  }
+  const el = document.getElementById("slotGeo");
+  el.classList.add("ok");
+  el.querySelector("span").textContent = `${name} · ${S.shapes.size.toLocaleString()} postcodes`;
+}
+
+function ingest(rows, fields, name) {
+  const c = {}; for (const k in COLS) c[k] = findCol(fields, COLS[k]);
+  if (!c.lat || !c.lon || !c.fac || !c.pc)
+    throw new Error("needs delivery lat/lon, facility and postcode columns; found " + fields.join(", "));
+  const n0 = rows.length;
+  const ds = { name, lat: new Float64Array(n0), lon: new Float64Array(n0), fac: new Uint16Array(n0),
+    pc: new Int32Array(n0), prod: new Int16Array(n0), grp: new Uint8Array(n0), cnt: new Float32Array(n0) };
+  let n = 0;
+  for (const row of rows) {
+    const la = parseFloat(row[c.lat]), lo = parseFloat(row[c.lon]);
+    if (!isFinite(la) || !isFinite(lo) || (la === 0 && lo === 0)) continue;
+    const f = idOf(facDict, facs, (row[c.fac] || "(blank)").trim() || "(blank)", nm => ({ name: nm, lat: NaN, lon: NaN }));
+    if (isNaN(facs[f].lat) && c.flat && c.flon) {
+      const a = parseFloat(row[c.flat]), b = parseFloat(row[c.flon]);
+      if (isFinite(a) && isFinite(b) && !(a === 0 && b === 0)) { facs[f].lat = a; facs[f].lon = b; }
+    }
+    const pt = c.prod ? ((row[c.prod] || "(blank)").trim() || "(blank)") : "(all)";
+    const ct = c.cnt ? parseFloat(row[c.cnt]) : 1;
+    ds.lat[n] = la; ds.lon[n] = lo; ds.fac[n] = f;
+    ds.pc[n] = parseInt(row[c.pc], 10) || -1;
+    ds.prod[n] = idOf(prodDict, prods, pt); ds.grp[n] = EXPRESS_PRODUCTS.has(pt) ? 0 : 1;
+    ds.cnt[n] = isFinite(ct) ? ct : 1;
+    n++;
+  }
+  if (!n) throw new Error("no rows with valid coordinates");
+  ds.n = n;
+  return ds;
+}
+
+function afterLoad() {
+  const any = S.base || S.fut;
+  if (!any) { document.getElementById("drop").classList.remove("empty"); return; }
+  // facility location: from the file, else the median of its deliveries
+  facs.forEach((F, f) => {
+    if (!isNaN(F.lat)) return;
+    const la = [], lo = [];
+    for (const ds of [S.base, S.fut]) if (ds) for (let i = 0; i < ds.n; i++) if (ds.fac[i] === f) { la.push(ds.lat[i]); lo.push(ds.lon[i]); }
+    la.sort((a, b) => a - b); lo.sort((a, b) => a - b);
+    F.lat = la[la.length >> 1]; F.lon = lo[lo.length >> 1];
+  });
+  const size = facs.map(() => 0);
+  for (let i = 0; i < any.n; i++) size[any.fac[i]]++;
+  facs.map((_, i) => i).sort((a, b) => size[b] - size[a]).forEach((f, r) => facs[f].colour = colourFor(r));
+  // postcode centre = mean of its delivery points (both files share addresses)
+  const acc = new Map();
+  for (const ds of [S.base, S.fut]) if (ds) for (let i = 0; i < ds.n; i++) {
+    let o = acc.get(ds.pc[i]); if (!o) acc.set(ds.pc[i], o = [0, 0, 0]);
+    o[0] += ds.lat[i]; o[1] += ds.lon[i]; o[2]++;
+  }
+  S.pcCentre = new Map([...acc].map(([k, o]) => [k, [o[0] / o[2], o[1] / o[2]]]));
+  const sel = document.getElementById("prod"), was = S.prod;
+  sel.innerHTML = `<option value="all">All products</option><option value="g0">Express Post (group)</option><option value="g1">Parcel Post (group)</option>` +
+    prods.filter(p => p !== "(all)").map(p => `<option value="p${prodDict.get(p)}">${esc(p)}</option>`).join("");
+  sel.value = [...sel.options].some(o => o.value === was) ? was : "all";
+  S.prod = sel.value;
+  document.getElementById("tag1").textContent = "Base · " + (S.base ? S.base.name : "not loaded");
+  document.getElementById("tag2").textContent = "Future · " + (S.fut ? S.fut.name : "not loaded");
+  buildMarkers();
+  refresh(true);
+}
+
+// ---------- aggregation ----------
+const prodOk = (ds, i) => S.prod === "all" ? true : S.prod[0] === "g" ? ds.grp[i] === +S.prod.slice(1) : ds.prod[i] === +S.prod.slice(1);
+const facOk = (ds, i) => !S.selected.size || S.selected.has(ds.fac[i]);
+const val = (ds, i) => S.measure === "points" ? 1 : ds.cnt[i];
+
+// one pass over both files -> postcode cells (map + postcode table), facility totals, facility x product
+function aggregate() {
+  const cells = new Map(), perFac = facs.map(() => ({ b: 0, fu: 0, pcs: new Set() })), fp = new Map();
+  let tb = 0, tf = 0;
+  for (const [ds, side] of [[S.base, "b"], [S.fut, "f"]]) {
+    if (!ds) continue;
+    for (let i = 0; i < ds.n; i++) {
+      const v = val(ds, i), f = ds.fac[i], pOk = prodOk(ds, i), fOk = facOk(ds, i);
+      if (pOk) { perFac[f][side === "b" ? "b" : "fu"] += v; perFac[f].pcs.add(ds.pc[i]); }
+      if (fOk) {                                                           // facility x product ignores the product filter
+        const k = f * 1000 + ds.prod[i];
+        let o = fp.get(k); if (!o) fp.set(k, o = { f, p: ds.prod[i], b: 0, f2: 0 });
+        if (side === "b") o.b += v; else o.f2 += v;
+      }
+      if (!pOk || !fOk) continue;
+      if (side === "b") tb += v; else tf += v;
+      let o = cells.get(ds.pc[i]);
+      if (!o) cells.set(ds.pc[i], o = { pc: ds.pc[i], b: 0, f: 0, g: [[0, 0], [0, 0]], fac: new Map() });
+      o[side] += v; o.g[ds.grp[i]][side === "b" ? 0 : 1] += v;
+      o.fac.set(f, (o.fac.get(f) || 0) + v);
+    }
+  }
+  for (const o of cells.values()) {
+    o.d = o.f - o.b; o.gr = o.b ? o.f / o.b : (o.f ? Infinity : 0);
+    o.top = [...o.fac].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+  }
+  return { cells: [...cells.values()], perFac, fp: [...fp.values()], tb, tf };
+}
+
+// ---------- maps ----------
+function makeMap(id) {
+  const m = L.map(id, { preferCanvas: true }).setView([-37.81, 144.96], 9);
+  L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 16, attribution: "Tiles &copy; Esri" }).addTo(m);
+  m._cells = L.layerGroup().addTo(m);
+  m._facs = L.layerGroup().addTo(m);
+  return m;
+}
+const map1 = makeMap("map1"), map2 = makeMap("map2");
+let syncing = false;
+for (const [a, b] of [[map1, map2], [map2, map1]])
+  a.on("move", () => { if (syncing || S.view !== "split") return; syncing = true; b.setView(a.getCenter(), a.getZoom(), { animate: false }); syncing = false; });
+const legend = L.control({ position: "bottomright" });
+legend.onAdd = () => (legend._div = L.DomUtil.create("div", "legend"));
+legend.addTo(map1);
+
+function mix(t, from, to) {
+  t = Math.max(0, Math.min(1, t));
+  const a = parseInt(from.slice(1), 16), b = parseInt(to.slice(1), 16);
+  const ch = sh => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * t);
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
+const growthColour = o => !o.b ? (o.f ? GROWTH_BINS[GROWTH_BINS.length - 1].c : null) : GROWTH_BINS.find(x => o.gr < x.max).c;
+const quant = (arr, q) => { if (!arr.length) return 1; const a = arr.slice().sort((x, y) => x - y); return a[Math.floor(q * (a.length - 1))]; };
+
+function cellTip(o) {
+  const facLine = o.top.length ? esc(facs[o.top[0]].name) + (o.top.length > 1 ? ` <i>+${o.top.length - 1} other</i>` : "") : "";
+  const gl = (g, i) => (g[0] || g[1]) ? `<br>${GROUPS[i]}: ${fmt(g[0])} → ${fmt(g[1])} (${ratio(g[1], g[0])})` : "";
+  return `<b>Postcode ${o.pc}</b> · ${facLine}<br>${fmt(o.b)} → ${fmt(o.f)} ${unit()} · <b>${ratio(o.f, o.b)}</b> · ${o.d >= 0 ? "+" : ""}${fmt(o.d)}` +
+    gl(o.g[0], 0) + gl(o.g[1], 1);
+}
+
+const OUTLINE = { color: "#ffffff", weight: 0.8 }, HILITE = { color: "#14213d", weight: 3 };
+// postcodes are always drawn as their Australia Post boundary; nothing is drawn without one
+function drawCells(m, cells, colourOf, keepLayers) {
+  m._cells.clearLayers();
+  for (const o of cells) {
+    const colour = colourOf(o), shape = S.shapes && S.shapes.get(o.pc);
+    if (!colour || !shape) continue;
+    const layer = L.geoJSON(shape, { style: { ...OUTLINE, fillColor: colour, fillOpacity: 0.75 } })
+      .bindTooltip(cellTip(o), { sticky: true, direction: "top", offset: [0, -6] })
+      .on("mouseover", () => layer.setStyle(HILITE)).on("mouseout", () => layer.setStyle(OUTLINE))
+      .addTo(m._cells);
+    if (keepLayers) S.layers.set(o.pc, layer);
+  }
+}
+
+// postcodes in the CSVs that the boundary file does not have: named, never guessed at
+function missingHint() {
+  const miss = S.cells.filter(o => !S.shapes.get(o.pc)).map(o => o.pc);
+  return miss.length ? `<div class="hint" style="color:#b2182b">${miss.length} postcode${miss.length > 1 ? "s" : ""} not in the boundary file, not drawn: ${miss.slice(0, 12).join(", ")}${miss.length > 12 ? "…" : ""}</div>` : "";
+}
+
+function renderMap(cells) {
+  S.layers = new Map();
+  document.getElementById("slotGeo").classList.toggle("need", !S.shapes);
+  if (!S.shapes) {
+    map1._cells.clearLayers(); map2._cells.clearLayers();
+    legend._div.innerHTML = `<div class="t" style="color:#b2182b">Postcode shapes not loaded</div>` +
+      `<div>Drop <code>AP_Postcodes_simplified.geojson</code> (made by <code>utilities/convert_postcode_boundaries.py</code>) to draw the map. The tables already work.</div>`;
+    return;
+  }
+  let leg;
+  if (S.view === "growth") {
+    drawCells(map1, cells, growthColour, true);
+    leg = `<div class="t">Growth, future ÷ base</div>` +
+      GROWTH_BINS.map(x => `<div class="it"><span class="bx" style="background:${x.c}"></span>${x.l}</div>`).join("");
+  } else if (S.view === "added") {
+    const hi = Math.max(1, quant(cells.map(o => o.d).filter(d => d > 0), 0.98));
+    const lo = Math.min(-1, quant(cells.map(o => o.d).filter(d => d < 0), 0.02));
+    drawCells(map1, cells, o => (o.b || o.f) ? (o.d >= 0 ? mix(Math.sqrt(o.d / hi), "#e5f5e0", "#00441b") : mix(Math.sqrt(o.d / lo), "#fde0dd", "#b2182b")) : null, true);
+    leg = `<div class="t">Added ${unit()}, future − base</div>` +
+      `<div class="grad" style="background:linear-gradient(90deg,#e5f5e0,#00441b)"></div><div class="ends"><span>0</span><span>+${fmt(hi)} more</span></div>` +
+      (lo < -1 ? `<div class="grad" style="background:linear-gradient(90deg,#fde0dd,#b2182b)"></div><div class="ends"><span>0</span><span>${fmt(lo)} fewer</span></div>` : "");
+  } else {
+    const hi = Math.max(1, quant(cells.map(o => Math.max(o.b, o.f)), 0.98));
+    const col = v => v > 0 ? mix(Math.sqrt(v / hi), "#dfe7fa", "#14306e") : null;
+    drawCells(map1, cells, o => col(o.b), true);
+    drawCells(map2, cells, o => col(o.f), false);
+    leg = `<div class="t">${unit()[0].toUpperCase() + unit().slice(1)} per postcode</div>` +
+      `<div class="grad" style="background:linear-gradient(90deg,#dfe7fa,#14306e)"></div><div class="ends"><span>0</span><span>${fmt(hi)}+</span></div>` +
+      `<div class="hint">Same colour scale on both maps</div>`;
+  }
+  leg += missingHint();
+  if (S.view !== "split") map2._cells.clearLayers();
+  legend._div.innerHTML = leg;
+}
+
+function fitTo(cells) {
+  const b = L.latLngBounds([]);
+  for (const o of cells) {
+    if (!(o.b || o.f)) continue;
+    const layer = S.layers.get(o.pc);
+    if (layer) b.extend(layer.getBounds()); else if (S.pcCentre.get(o.pc)) b.extend(S.pcCentre.get(o.pc));
+  }
+  if (b.isValid()) map1.fitBounds(b.pad(0.03), { animate: false });
+}
+
+function buildMarkers() {
+  for (const m of [map1, map2]) {
+    m._facs.clearLayers();
+    facs.forEach((F, f) => {
+      if (isNaN(F.lat)) return;
+      const icon = L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 12],
+        html: `<div class="fac-badge" data-f="${f}" style="background:${F.colour}">${esc(initials(F.name))}</div>` });
+      L.marker([F.lat, F.lon], { icon, riseOnHover: true }).bindTooltip(esc(F.name), { direction: "top", offset: [0, -12] })
+        .on("click", e => toggleFac(f, e.originalEvent)).addTo(m._facs);
+    });
+  }
+}
+
+// ---------- side panel ----------
+function renderPanel(A) {
+  const both = S.base && S.fut;
+  document.getElementById("kBase").textContent = S.base ? fmt(A.tb) : "–";
+  document.getElementById("kFut").textContent = S.fut ? fmt(A.tf) : "–";
+  document.getElementById("kGrow").textContent = both ? ratio(A.tf, A.tb) : "–";
+  document.getElementById("kAdd").innerHTML = both ? signed(A.tf - A.tb) : "–";
+  const prodLabel = document.getElementById("prod").selectedOptions[0]?.textContent || "All products";
+  const facLabel = S.selected.size ? [...S.selected].map(f => facs[f].name).join(", ") : "All facilities";
+  document.getElementById("kScope").textContent = `${facLabel} · ${prodLabel} · ${unit()}`;
+
+  // facilities
+  const rows = facs.map((F, f) => ({ f, ...A.perFac[f] })).filter(r => r.b || r.fu).sort((a, b) => b.fu - a.fu || b.b - a.b);
+  document.getElementById("facRows").innerHTML = rows.map(r => {
+    const cls = "click " + (S.selected.has(r.f) ? "sel" : S.selected.size ? "dim" : "");
+    return `<tr data-f="${r.f}" class="${cls}"><td><span class="sw" style="background:${facs[r.f].colour}"></span>${esc(facs[r.f].name)}</td>` +
+      `<td>${r.pcs.size}</td><td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td>${signed(r.fu - r.b)}</td></tr>`;
+  }).join("");
+  const sb = rows.reduce((a, r) => a + r.b, 0), sf = rows.reduce((a, r) => a + r.fu, 0);
+  document.getElementById("facFoot").innerHTML =
+    `<tr><td>Total</td><td>${new Set(rows.flatMap(r => [...r.pcs])).size}</td><td>${fmt(sb)}</td><td>${fmt(sf)}</td><td>${ratio(sf, sb)}</td><td>${signed(sf - sb)}</td></tr>`;
+
+  // facility x product: an "All" block first, then one block per facility
+  S.fpTable = fpTable(A.fp);
+  document.getElementById("fpRows").innerHTML = S.fpTable.map(r => r.head
+    ? `<tr class="grp"><td>${r.f < 0 ? "All shown facilities" : `<span class="sw" style="background:${facs[r.f].colour}"></span>` + esc(facs[r.f].name)}</td>` +
+      `<td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td></td><td></td><td></td></tr>`
+    : `<tr><td class="ind">${esc(prods[r.p])} <span class="muted">· ${EXPRESS_PRODUCTS.has(prods[r.p]) ? "Express" : "Parcel"}</span></td>` +
+      `<td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td>${r.sb.toFixed(2)}</td><td>${r.sf.toFixed(2)}</td>` +
+      `<td><span class="${r.sf - r.sb > 0.005 ? "up" : r.sf - r.sb < -0.005 ? "down" : ""}">${r.sf - r.sb >= 0 ? "+" : ""}${(r.sf - r.sb).toFixed(2)}</span></td></tr>`).join("");
+
+  // postcodes
+  renderPostcodes(A.cells);
+  document.querySelectorAll(".fac-badge").forEach(el => el.classList.toggle("off", S.selected.size > 0 && !S.selected.has(+el.dataset.f)));
+}
+
+function fpTable(fp) {
+  const block = (f, items) => {
+    const byP = new Map();
+    for (const o of items) { const x = byP.get(o.p) || { b: 0, fu: 0 }; x.b += o.b; x.fu += o.f2; byP.set(o.p, x); }
+    const b = [...byP.values()].reduce((a, x) => a + x.b, 0), fu = [...byP.values()].reduce((a, x) => a + x.fu, 0);
+    return [{ head: true, f, b, fu },
+      ...[...byP].sort((x, y) => y[1].b - x[1].b || y[1].fu - x[1].fu).map(([p, x]) =>
+        ({ f, p, b: x.b, fu: x.fu, sb: b ? x.b / b * 100 : 0, sf: fu ? x.fu / fu * 100 : 0 }))];
+  };
+  const byF = new Map();
+  for (const o of fp) { if (!byF.has(o.f)) byF.set(o.f, []); byF.get(o.f).push(o); }
+  const order = [...byF.keys()].sort((a, b) => byF.get(b).reduce((s, o) => s + o.f2, 0) - byF.get(a).reduce((s, o) => s + o.f2, 0));
+  // the "all" block only adds something when more than one facility is shown
+  return [...(order.length > 1 ? block(-1, fp) : []), ...order.flatMap(f => block(f, byF.get(f)))];
+}
+
+function renderPostcodes(cells) {
+  const k = S.sortKey, dir = S.sortDir;
+  const keyOf = o => k === "pc" ? o.pc : k === "fac" ? facs[o.top[0]]?.name || "" : k === "g" ? (isFinite(o.gr) ? o.gr : 1e9) : o[k];
+  S.pcSorted = cells.slice().sort((a, b) => { const x = keyOf(a), y = keyOf(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir; });
+  document.getElementById("pcCount").textContent = `(${cells.length})`;
+  document.getElementById("pcRows").innerHTML = S.pcSorted.map(o =>
+    `<tr class="click" data-pc="${o.pc}"><td>${o.pc}</td><td class="wrap">${o.top.length ? esc(shortName(facs[o.top[0]].name)) + (o.top.length > 1 ? ` <span class="muted">+${o.top.length - 1}</span>` : "") : ""}</td>` +
+    `<td>${fmt(o.b)}</td><td>${fmt(o.f)}</td><td>${ratio(o.f, o.b)}</td><td>${signed(o.d)}</td></tr>`).join("");
+  document.querySelectorAll("th[data-k]").forEach(th => th.classList.toggle("sorted", th.dataset.k === k));
+}
+
+function refresh(fit) {
+  if (!S.base && !S.fut) return;
+  const A = aggregate();
+  S.cells = A.cells;
+  renderPanel(A);
+  renderMap(A.cells);
+  if (fit) fitTo(A.cells);
+}
+
+function toggleFac(f, ev) {
+  const multi = ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey);
+  if (multi) S.selected.has(f) ? S.selected.delete(f) : S.selected.add(f);
+  else if (S.selected.size === 1 && S.selected.has(f)) S.selected.clear();
+  else S.selected = new Set([f]);
+  refresh(true);
+}
+
+// ---------- CSV export ----------
+function download(name, header, rows) {
+  const q = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+  const csv = [header, ...rows].map(r => r.map(q).join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+const r4 = v => Math.round(v * 10000) / 10000;
+document.getElementById("dlPC").onclick = () => {
+  if (!S.pcSorted) return;
+  const u = S.measure;
+  download(`postcode_comparison_${u}.csv`,
+    ["postcode", "facilities", `base_${u}`, `future_${u}`, "growth", "added", `base_express_${u}`, `future_express_${u}`, `base_parcel_${u}`, `future_parcel_${u}`],
+    S.pcSorted.map(o => [o.pc, o.top.map(f => facs[f].name).join("; "), r4(o.b), r4(o.f), o.b ? r4(o.f / o.b) : "", r4(o.d),
+      r4(o.g[0][0]), r4(o.g[0][1]), r4(o.g[1][0]), r4(o.g[1][1])]));
+};
+document.getElementById("dlFP").onclick = () => {
+  if (!S.fpTable) return;
+  const u = S.measure;
+  download(`facility_product_${u}.csv`,
+    ["facility", "product_type", "product_group", `base_${u}`, `future_${u}`, "growth", "base_share_pct", "future_share_pct", "share_change_pts"],
+    S.fpTable.filter(r => !r.head).map(r => [r.f < 0 ? "ALL" : facs[r.f].name, prods[r.p], EXPRESS_PRODUCTS.has(prods[r.p]) ? GROUPS[0] : GROUPS[1],
+      r4(r.b), r4(r.fu), r.b ? r4(r.fu / r.b) : "", r4(r.sb), r4(r.sf), r4(r.sf - r.sb)]));
+};
+
+// ---------- wiring ----------
+function seg(id, key, after) {
+  const el = document.getElementById(id);
+  el.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    el.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    S[key] = b.dataset.v; if (after) after(); refresh(false);
+  });
+}
+seg("segView", "view", () => {
+  document.getElementById("maps").classList.toggle("split", S.view === "split");
+  setTimeout(() => { map1.invalidateSize(); map2.invalidateSize(); map2.setView(map1.getCenter(), map1.getZoom(), { animate: false }); }, 0);
+});
+seg("segMeasure", "measure");
+document.getElementById("prod").onchange = e => { S.prod = e.target.value; refresh(false); };
+document.getElementById("showAll").onclick = () => { S.selected.clear(); refresh(true); };
+document.getElementById("facRows").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) toggleFac(+tr.dataset.f, e); });
+document.querySelector("#pcRows").closest("table").querySelector("thead").addEventListener("click", e => {
+  const k = e.target.closest("th")?.dataset.k; if (!k) return;
+  if (k === S.sortKey) S.sortDir = -S.sortDir; else { S.sortKey = k; S.sortDir = k === "pc" || k === "fac" ? 1 : -1; }
+  renderPostcodes(S.cells);
+});
+document.getElementById("pcRows").addEventListener("click", e => {
+  const tr = e.target.closest("tr"); if (!tr) return;
+  const pc = +tr.dataset.pc, layer = S.layers.get(pc), c = S.pcCentre.get(pc);
+  document.querySelectorAll("#pcRows tr.sel").forEach(x => x.classList.remove("sel"));
+  tr.classList.add("sel");
+  if (layer) map1.fitBounds(layer.getBounds().pad(0.4), { animate: false, maxZoom: 14 });
+  else if (c) map1.setView(c, Math.max(map1.getZoom(), 12), { animate: false });
+  if (layer) {
+    layer.setStyle(HILITE);
+    layer.openTooltip(layer.getBounds().getCenter());
+    setTimeout(() => layer.setStyle(OUTLINE), 2500);
+  }
+});
+
+const fileIn = document.getElementById("file");
+let pickSlot = null;
+document.getElementById("pick").onclick = () => { pickSlot = null; fileIn.click(); };
+document.getElementById("slotBase").onclick = () => { pickSlot = "base"; fileIn.click(); };
+document.getElementById("slotFut").onclick = () => { pickSlot = "fut"; fileIn.click(); };
+document.getElementById("slotGeo").onclick = () => { pickSlot = "geo"; fileIn.click(); };
+fileIn.onchange = () => { if (fileIn.files.length) loadFiles(fileIn.files, fileIn.files.length === 1 ? pickSlot : null); fileIn.value = ""; };
+
+const drop = document.getElementById("drop");
+let depth = 0;
+window.addEventListener("dragenter", e => { e.preventDefault(); depth++; drop.classList.add("show"); });
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; drop.classList.remove("show"); } });
+window.addEventListener("drop", e => {
+  e.preventDefault(); depth = 0; drop.classList.remove("show");
+  const slot = e.target.closest && e.target.closest(".slot"), files = e.dataTransfer.files;
+  if (files.length) loadFiles(files, slot && files.length === 1 ? { slotFut: "fut", slotGeo: "geo", slotBase: "base" }[slot.id] : null);
+});
+</script>
+</body>
+</html>
