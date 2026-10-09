@@ -20,7 +20,14 @@ THE STEPS, in the order the run reports them:
      what the growth sheet implies. Rows are SAMPLED from the cell's own delivery points: a
      growing cell keeps all of them and draws the extra with replacement (is_synthetic=True),
      a shrinking one keeps a random subset.
-  5  VERIFY. Product group targets vs achieved per facility and in total, Product_type mix
+  5  POINTS. A synthetic row keeps everything it drew except WHERE it is: it gets a new random
+     point inside its postcode (vic_postcode_boundaries.csv), snapped to the nearest driveable
+     road by OSRM /nearest. A candidate is redrawn when OSRM finds no road for it, when the
+     road is more than --max-snap-m away (a lake, the bay, a park, a paddock interior), or
+     when the snapped point lands outside the postcode. Rows still without a point after
+     MAX_ROUNDS draws keep the copied coordinate and are counted. Real rows never move.
+     --points copy skips this and keeps today's copied coordinates (the old output).
+  6  VERIFY. Product group targets vs achieved per facility and in total, Product_type mix
      per facility and in total, parcel_count distribution, today vs future.
 
 A CELL THE SHEET DOES NOT COVER falls back, and `level` in growth_factors.csv says how:
@@ -51,20 +58,27 @@ next to the sheet's growth (Product_type fixes the group) and the run says so.
     python utilities/generate_future_demand.py --to-fy FY35 --facilities all
     python utilities/generate_future_demand.py --growth outputs/future_demand/growth_factors.csv
     python utilities/generate_future_demand.py --bound Product_type+parcel_count@facility
+    python utilities/generate_future_demand.py --osrm http://localhost:5001 --max-snap-m 150
 """
 
 import argparse
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import requests
+import shapely
+from requests.adapters import HTTPAdapter
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMAND = ROOT / "inputs/deilvery_events/melbourne_catchment.csv"
 FORECAST = ROOT / "inputs/future_demand/growth_volume_sheet.xlsx"
 FORECAST_SHEET = "Delivery Volume (No OOH)"
 FC_POSTCODE, FC_PRODUCT = "Del post code", "Product type"
+BOUNDARIES = ROOT / "inputs/deilvery_events/vic_postcode_boundaries.csv"
 OUT_DIR = ROOT / "outputs/future_demand"
 
 FAC, PC, GRP = "Terminating_facility_name", "POSTCODE", "product_group"
@@ -76,6 +90,12 @@ SCOPES = {"total": [], "group": [GRP], "facility": [FAC, GRP]}
 
 IPF_TOL = 1e-9
 IPF_MAX_ITER = 1000
+
+OSRM_URL = "http://localhost:5001"   # the local osrm-server container
+MAX_SNAP_M = 250          # a candidate further than this from a road is redrawn
+EDGE_TOL_DEG = 1e-4       # ~10 m: a point snapped onto the postcode's boundary road is inside
+MAX_ROUNDS = 30           # draw-and-snap rounds before a row keeps its copied coordinate
+LAT_COLS, LON_COLS = ["Del_Lat", "delivery_lat"], ["Del_Long", "delivery_lon"]
 
 
 def section(title):
@@ -338,14 +358,149 @@ def scale_step(a, today, selected, fc, bounds, attrs):
     got = future.groupby(KEY).size().reindex(pd.MultiIndex.from_frame(factors[KEY]),
                                               fill_value=0)
     assert (got.to_numpy() == factors["future_n"].to_numpy()).all(), "cells drifted"
-    future.to_csv(a.out, index=False)
     print(f"future: {len(future):,} rows ({len(future) / len(today) - 1:+.1%}), "
           f"{future['parcel_count'].sum():,} parcels, "
-          f"{future['is_synthetic'].sum():,} synthetic rows -> {a.out}")
+          f"{future['is_synthetic'].sum():,} synthetic rows")
     return factors, future
 
 
-# ---------------------------------------------------------------- 5 verify
+# ---------------------------------------------------------------- 5 points
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance in metres, elementwise."""
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    h = (np.sin((p2 - p1) / 2) ** 2
+         + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2)
+    return 2 * 6_371_000.0 * np.arcsin(np.sqrt(h))
+
+
+def snap_one(session, url, lon, lat):
+    """OSRM /nearest for one point: (lon, lat) on the nearest driveable edge, or None."""
+    for attempt in range(3):
+        try:
+            resp = session.get(f"{url}/nearest/v1/driving/{lon:.6f},{lat:.6f}", timeout=10)
+            break
+        except requests.RequestException:
+            if attempt == 2:
+                return None
+            time.sleep(0.1 * (attempt + 1))
+    if resp.status_code != 200 or (data := resp.json()).get("code") != "Ok":
+        return None
+    loc = (data.get("waypoints") or [{}])[0].get("location") or []
+    return (float(loc[0]), float(loc[1])) if len(loc) == 2 else None
+
+
+def snap_points(lon, lat, url, workers):
+    """Snapped (lon, lat) arrays for every point, NaN where OSRM gave no road."""
+    session = requests.Session()
+    session.mount("http://", HTTPAdapter(pool_maxsize=workers))
+    session.mount("https://", HTTPAdapter(pool_maxsize=workers))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        got = list(ex.map(lambda p: snap_one(session, url, *p), zip(lon, lat)))
+    session.close()
+    out = np.array([g if g else (np.nan, np.nan) for g in got], dtype=float).reshape(-1, 2)
+    return out[:, 0], out[:, 1]
+
+
+def check_osrm(url):
+    s = requests.Session()
+    if snap_one(s, url, 144.9631, -37.8136) is None:              # Melbourne GPO
+        raise SystemExit(f"OSRM /nearest does not answer at {url}: start the server "
+                         f"(docker start <osrm container>), pass --osrm, or --points copy")
+
+
+def draw_in(poly, m, rng):
+    """m uniform points inside `poly` (lon/lat), by rejection from its bounding box."""
+    x0, y0, x1, y1 = poly.bounds
+    xs, ys = [], []
+    while sum(map(len, xs)) < m:
+        x, y = rng.uniform(x0, x1, 2 * m), rng.uniform(y0, y1, 2 * m)
+        ok = shapely.contains_xy(poly, x, y)
+        xs.append(x[ok]), ys.append(y[ok])
+    return np.concatenate(xs)[:m], np.concatenate(ys)[:m]
+
+
+def points_step(a, future):
+    """Synthetic rows moved to a random road point inside their postcode."""
+    section("5 POINTS  synthetic rows: random point in the postcode, snapped to a road")
+    syn = future.index[future["is_synthetic"]]
+    if a.points == "copy" or not len(syn):
+        print(f"--points {a.points}: {len(syn):,} synthetic rows keep the copied coordinate")
+        return future
+    check_osrm(a.osrm)
+
+    polys = pd.read_csv(a.boundaries)
+    polys = dict(zip(polys[PC].astype(int), shapely.from_wkt(polys["geometry"])))
+    for g in polys.values():
+        shapely.prepare(g)
+    need = future.loc[syn].groupby(PC).groups                    # postcode -> row labels
+    nopoly = [pc for pc in need if pc not in polys]
+    if nopoly:
+        print(f"  {sum(len(need[pc]) for pc in nopoly):,} rows in {len(nopoly)} postcodes "
+              f"with no boundary keep the copied coordinate: {sorted(nopoly)}")
+    want = {pc: len(rows) for pc, rows in need.items() if pc in polys}
+    got = {pc: [] for pc in want}                                  # accepted (lat, lon, metres)
+    rate = {pc: 0.8 for pc in want}                                # acceptance, to oversize draws
+    rng = np.random.default_rng([a.seed, 5])                     # own stream: rows unchanged
+    tally = dict(drawn=0, no_road=0, too_far=0, outside=0)
+
+    for rnd in range(MAX_ROUNDS):
+        short = {pc: want[pc] - len(got[pc]) for pc in want if len(got[pc]) < want[pc]}
+        if not short:
+            break
+        batch = []
+        for pc, k in short.items():
+            m = int(np.ceil(k / max(rate[pc], 0.05) * 1.2)) + 2
+            x, y = draw_in(polys[pc], m, rng)
+            batch.append(pd.DataFrame({PC: pc, "lon": x, "lat": y}))
+        c = pd.concat(batch, ignore_index=True)
+        c["s_lon"], c["s_lat"] = snap_points(c["lon"], c["lat"], a.osrm, a.workers)
+        c["m"] = haversine_m(c["lat"], c["lon"], c["s_lat"], c["s_lon"])
+        no_road = c["s_lon"].isna()
+        too_far = ~no_road & (c["m"] > a.max_snap_m)
+        inside = np.zeros(len(c), bool)
+        for pc, ix in c.groupby(PC).groups.items():
+            ix = np.asarray(ix)
+            inside[ix] = shapely.dwithin(polys[pc], shapely.points(
+                c.loc[ix, "s_lon"].fillna(0), c.loc[ix, "s_lat"].fillna(0)), EDGE_TOL_DEG)
+        ok = ~no_road & ~too_far & inside
+        tally["drawn"] += len(c)
+        tally["no_road"] += no_road.sum()
+        tally["too_far"] += too_far.sum()
+        tally["outside"] += (~no_road & ~too_far & ~inside).sum()
+        for pc, g in c[ok].groupby(PC):
+            got[pc].extend(zip(g["s_lat"], g["s_lon"], g["m"]))
+        rate.update(ok.groupby(c[PC]).mean())
+        print(f"  round {rnd + 1}: {len(c):,} candidates for {sum(short.values()):,} rows "
+              f"in {len(short)} postcodes, {ok.sum():,} accepted")
+
+    moved, metres, left = 0, [], 0
+    for pc, rows in need.items():
+        pts = got.get(pc, [])[:len(rows)]
+        left += len(rows) - len(pts)
+        if not pts:
+            continue
+        lat, lon, m = map(np.array, zip(*pts))
+        idx = rows[:len(pts)]
+        for col in LAT_COLS:
+            future.loc[idx, col] = lat.round(6)
+        for col in LON_COLS:
+            future.loc[idx, col] = lon.round(6)
+        moved += len(pts)
+        metres.extend(m)
+
+    print(f"candidates {tally['drawn']:,} | rejected: no road {tally['no_road']:,}, "
+          f"> {a.max_snap_m:g} m from a road {tally['too_far']:,}, snapped outside the "
+          f"postcode {tally['outside']:,}")
+    print(f"synthetic rows {len(syn):,}: moved {moved:,}, kept the copied coordinate "
+          f"{len(syn) - moved:,} ({left:,} unfilled after {MAX_ROUNDS} rounds)")
+    if metres:
+        q = np.percentile(metres, [50, 90, 99])
+        print(f"snap distance m: median {q[0]:.0f}, p90 {q[1]:.0f}, p99 {q[2]:.0f}")
+    return future
+
+
+# ---------------------------------------------------------------- 6 verify
 
 def compare(today, future, col, by=None):
     """today % vs future % of `col` (overall or within `by`), with the difference in points."""
@@ -361,7 +516,7 @@ def max_diff(tab):
 
 
 def verify_step(a, today, future, factors):
-    section("5 VERIFY  today vs future")
+    section("6 VERIFY  today vs future")
     tab = factors.groupby([FAC, GRP])[["n", "future_n"]].sum()
     tab["future"] = future.groupby([FAC, GRP]).size()
     tab["growth"] = (tab["future"] / tab["n"]).round(3)
@@ -412,6 +567,14 @@ def main():
     ap.add_argument("--bound", nargs="+", default=BOUND,
                     help="ATTR[+ATTR]@total|group|facility specs to hold, or 'none'")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--points", choices=["road", "copy"], default="road",
+                    help="synthetic rows: a random road point inside the postcode (OSRM), "
+                         "or the copied coordinate of the row they were drawn from")
+    ap.add_argument("--boundaries", type=Path, default=BOUNDARIES)
+    ap.add_argument("--osrm", default=OSRM_URL, help="OSRM server for /nearest")
+    ap.add_argument("--max-snap-m", type=float, default=MAX_SNAP_M,
+                    help="redraw a candidate further than this from a road")
+    ap.add_argument("--workers", type=int, default=20, help="concurrent OSRM requests")
     ap.add_argument("--out", type=Path, default=OUT_DIR / "future_demand.csv")
     a = ap.parse_args()
 
@@ -430,6 +593,9 @@ def main():
     today, selected = facilities_step(a, today)
     alignment_step(today, selected, fc)
     factors, future = scale_step(a, today, selected, fc, bounds, attrs)
+    future = points_step(a, future)
+    future.to_csv(a.out, index=False)
+    print(f"-> {a.out}")
     verify_step(a, today, future, factors)
 
 

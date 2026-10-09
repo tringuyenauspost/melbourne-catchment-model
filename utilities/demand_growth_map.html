@@ -85,6 +85,11 @@
     border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); color: #fff; font: 700 10px system-ui; }
   .fac-badge.off { opacity: .35; }
   .leaflet-tooltip { font: 12px system-ui; }
+  .pts { pointer-events: none; }
+  .legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1px solid rgba(0,0,0,.25); }
+  .legend .it.tg { cursor: pointer; user-select: none; }
+  .legend .it.tg.off { opacity: .35; }
+  .legend .n { margin-left: auto; padding-left: 10px; font-variant-numeric: tabular-nums; color: var(--muted); }
   #drop { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 2000;
     background: color-mix(in srgb, var(--bg) 82%, transparent); pointer-events: none; opacity: 0; transition: opacity .12s; }
   #drop.show { opacity: 1; }
@@ -104,15 +109,17 @@
     <div class="blk">
       <h1>Demand growth by postcode</h1>
       <div class="slots">
-        <div class="slot" id="slotBase"><b>Base CSV</b><span>click or drop — e.g. melbourne_catchment.csv</span></div>
+        <div class="slot" id="slotBase"><b>Base CSV <i class="muted" style="font-weight:400">optional</i></b><span>click or drop — e.g. melbourne_catchment.csv</span></div>
         <div class="slot" id="slotFut"><b>Future CSV</b><span>click or drop — e.g. future_demand.csv</span></div>
         <div class="slot" id="slotGeo"><b>Postcode shapes</b><span>AP_Postcodes_simplified.geojson</span></div>
       </div>
-      <div class="hint" id="loadHint">Drop all three at once: the CSV with an <code>is_synthetic</code> column is the future, a <code>.geojson</code> is the postcode shapes. Or drop / click a box. Shapes come from <code>utilities/convert_postcode_boundaries.py</code>; the map needs them.</div>
+      <div class="hint" id="loadHint">The future CSV and the postcode shapes are enough: without a base CSV, today = the future file's real (not generated) points. Drop files together or one at a time — the CSV with an <code>is_synthetic</code> column is the future, a <code>.geojson</code> is the shapes (from <code>utilities/convert_postcode_boundaries.py</code>).</div>
     </div>
     <div class="blk">
       <div class="row"><label>Map</label>
-        <span class="seg" id="segView"><button data-v="growth" class="on">Growth ×</button><button data-v="added">Added</button><button data-v="split">Base | Future</button></span></div>
+        <span class="seg" id="segView"><button data-v="growth" class="on">Growth ×</button><button data-v="added">Added</button><button data-v="split">Base | Future</button><button data-v="points">Points</button></span></div>
+      <div class="row" id="rowPts" hidden><label>Show</label>
+        <span class="seg" id="segPts"><button data-v="both" class="on">Both</button><button data-v="real">Real</button><button data-v="gen">Generated</button></span></div>
       <div class="row"><label>Count</label>
         <span class="seg" id="segMeasure"><button data-v="points" class="on">Delivery points</button><button data-v="parcels">Parcels</button></span></div>
       <div class="row"><label>Product</label><select id="prod"><option value="all">All products</option></select>
@@ -152,8 +159,8 @@
 </div>
 <div id="drop" class="empty">
   <div class="box">
-    <b>Drop the base CSV, future CSV and postcode shapes</b>
-    <p>Base CSV, future CSV and the postcode shapes GeoJSON, together or one at a time. The CSVs need delivery lat/lon, <code>Terminating_facility_name</code> and <code>POSTCODE</code>; <code>Product_type</code> and <code>parcel_count</code> are used when present.</p>
+    <b>Drop the future CSV and the postcode shapes</b>
+    <p>The future CSV and the postcode shapes GeoJSON, together or one at a time; a base CSV is optional. The CSVs need delivery lat/lon, <code>Terminating_facility_name</code> and <code>POSTCODE</code>; <code>Product_type</code> and <code>parcel_count</code> are used when present.</p>
     <button id="pick">Choose files…</button>
   </div>
 </div>
@@ -177,6 +184,7 @@ const COLS = {
   cnt:  ["parcel_count","article_count","parcels","count"],
   syn:  ["is_synthetic"],
 };
+const PT_REAL = "#2f5fd0", PT_GEN = "#e8590c";   // delivery points: kept from today vs generated
 const GROWTH_BINS = [                       // red = fewer than today, green = more
   { max: 0.8,      c: "#b2182b", l: "below 0.8" },
   { max: 0.95,     c: "#ef8a62", l: "0.8 – 0.95" },
@@ -191,7 +199,7 @@ const GROWTH_BINS = [                       // red = fewer than today, green = m
 // ---------- state ----------
 const facDict = new Map(), facs = [];       // shared by both files so filters apply to both
 const prodDict = new Map(), prods = [];
-const S = { base: null, fut: null, view: "growth", measure: "points", prod: "all", selected: new Set(),
+const S = { base: null, fut: null, b: null, view: "growth", measure: "points", pts: "both", prod: "all", selected: new Set(),
             pcCentre: new Map(), cells: [], sortKey: "d", sortDir: -1, layers: new Map(), shapes: null };
 
 const idOf = (dict, list, name, make) => {
@@ -269,7 +277,8 @@ function ingest(rows, fields, name) {
     throw new Error("needs delivery lat/lon, facility and postcode columns; found " + fields.join(", "));
   const n0 = rows.length;
   const ds = { name, lat: new Float64Array(n0), lon: new Float64Array(n0), fac: new Uint16Array(n0),
-    pc: new Int32Array(n0), prod: new Int16Array(n0), grp: new Uint8Array(n0), cnt: new Float32Array(n0) };
+    pc: new Int32Array(n0), prod: new Int16Array(n0), grp: new Uint8Array(n0), cnt: new Float32Array(n0),
+    syn: new Uint8Array(n0) };
   let n = 0;
   for (const row of rows) {
     const la = parseFloat(row[c.lat]), lo = parseFloat(row[c.lon]);
@@ -285,6 +294,7 @@ function ingest(rows, fields, name) {
     ds.pc[n] = parseInt(row[c.pc], 10) || -1;
     ds.prod[n] = idOf(prodDict, prods, pt); ds.grp[n] = EXPRESS_PRODUCTS.has(pt) ? 0 : 1;
     ds.cnt[n] = isFinite(ct) ? ct : 1;
+    ds.syn[n] = c.syn && /^(true|1|yes)$/i.test(String(row[c.syn]).trim()) ? 1 : 0;
     n++;
   }
   if (!n) throw new Error("no rows with valid coordinates");
@@ -292,7 +302,20 @@ function ingest(rows, fields, name) {
   return ds;
 }
 
+// no base CSV: today = the future file's real rows. Exact for growing cells (every point is kept),
+// but a shrinking cell lost points the future file no longer has, so it reads as flat
+function deriveBase(fut) {
+  const keep = []; for (let i = 0; i < fut.n; i++) if (!fut.syn[i]) keep.push(i);
+  const ds = { name: "real points of " + fut.name, derived: true, n: keep.length };
+  for (const k of ["lat", "lon", "fac", "pc", "prod", "grp", "cnt", "syn"])
+    ds[k] = fut[k].constructor.from(keep, i => fut[k][i]);
+  return ds;
+}
+
 function afterLoad() {
+  S.b = S.base || (S.fut ? deriveBase(S.fut) : null);
+  const slot = document.getElementById("slotBase");
+  if (!S.base) slot.querySelector("span").textContent = S.fut ? `not loaded · using ${S.b.n.toLocaleString()} real points of the future file` : "click or drop — e.g. melbourne_catchment.csv";
   const any = S.base || S.fut;
   if (!any) { document.getElementById("drop").classList.remove("empty"); return; }
   // facility location: from the file, else the median of its deliveries
@@ -318,7 +341,7 @@ function afterLoad() {
     prods.filter(p => p !== "(all)").map(p => `<option value="p${prodDict.get(p)}">${esc(p)}</option>`).join("");
   sel.value = [...sel.options].some(o => o.value === was) ? was : "all";
   S.prod = sel.value;
-  document.getElementById("tag1").textContent = "Base · " + (S.base ? S.base.name : "not loaded");
+  document.getElementById("tag1").textContent = "Base · " + (S.b ? S.b.name : "not loaded");
   document.getElementById("tag2").textContent = "Future · " + (S.fut ? S.fut.name : "not loaded");
   buildMarkers();
   refresh(true);
@@ -333,7 +356,7 @@ const val = (ds, i) => S.measure === "points" ? 1 : ds.cnt[i];
 function aggregate() {
   const cells = new Map(), perFac = facs.map(() => ({ b: 0, fu: 0, pcs: new Set() })), fp = new Map();
   let tb = 0, tf = 0;
-  for (const [ds, side] of [[S.base, "b"], [S.fut, "f"]]) {
+  for (const [ds, side] of [[S.b, "b"], [S.fut, "f"]]) {
     if (!ds) continue;
     for (let i = 0; i < ds.n; i++) {
       const v = val(ds, i), f = ds.fac[i], pOk = prodOk(ds, i), fOk = facOk(ds, i);
@@ -363,11 +386,51 @@ function makeMap(id) {
   const m = L.map(id, { preferCanvas: true }).setView([-37.81, 144.96], 9);
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
     { maxZoom: 16, attribution: "Tiles &copy; Esri" }).addTo(m);
+  m.createPane("points").style.zIndex = 450;                 // above the postcode shapes, below the badges
   m._cells = L.layerGroup().addTo(m);
   m._facs = L.layerGroup().addTo(m);
   return m;
 }
+
+// every delivery point on one canvas: a Leaflet marker each would stall at 250k points
+const PointsLayer = L.Layer.extend({
+  initialize() { this._groups = []; },
+  onAdd(m) {
+    this._c = L.DomUtil.create("canvas", "pts", m.getPane("points"));
+    m.on("moveend zoomend resize viewreset", this.redraw, this).on("zoomstart", this._hide, this);
+    this.redraw();
+  },
+  onRemove(m) {
+    L.DomUtil.remove(this._c);
+    m.off("moveend zoomend resize viewreset", this.redraw, this).off("zoomstart", this._hide, this);
+  },
+  setGroups(groups) { this._groups = groups; if (this._map) this.redraw(); },
+  _hide() { this._c.style.display = "none"; },
+  redraw() {
+    const m = this._map, c = this._c, sz = m.getSize(), dpr = window.devicePixelRatio || 1;
+    c.style.display = ""; c.width = sz.x * dpr; c.height = sz.y * dpr;
+    c.style.width = sz.x + "px"; c.style.height = sz.y + "px";
+    L.DomUtil.setPosition(c, m.containerPointToLayerPoint([0, 0]));
+    const ctx = c.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const z = m.getZoom(), r = z <= 10 ? 1.2 : z <= 12 ? 1.8 : z <= 14 ? 2.6 : 3.6;
+    const scale = 256 * Math.pow(2, z), o = m.project(m.containerPointToLatLng([0, 0]), z);
+    for (const g of this._groups) {
+      ctx.fillStyle = g.colour; ctx.globalAlpha = 0.8; ctx.beginPath();
+      for (let k = 0; k < g.idx.length; k++) {
+        const i = g.idx[k], s = Math.sin(g.ds.lat[i] * Math.PI / 180);
+        const x = (g.ds.lon[i] + 180) / 360 * scale - o.x;
+        const y = (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * scale - o.y;
+        if (x < -r || y < -r || x > sz.x + r || y > sz.y + r) continue;
+        ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, 2 * Math.PI);
+      }
+      ctx.fill();
+      if (z >= 13) { ctx.globalAlpha = 1; ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 0.6; ctx.stroke(); }
+    }
+  },
+});
 const map1 = makeMap("map1"), map2 = makeMap("map2");
+const points = new PointsLayer();
 let syncing = false;
 for (const [a, b] of [[map1, map2], [map2, map1]])
   a.on("move", () => { if (syncing || S.view !== "split") return; syncing = true; b.setView(a.getCenter(), a.getZoom(), { animate: false }); syncing = false; });
@@ -393,14 +456,14 @@ function cellTip(o) {
 
 const OUTLINE = { color: "#ffffff", weight: 0.8 }, HILITE = { color: "#14213d", weight: 3 };
 // postcodes are always drawn as their Australia Post boundary; nothing is drawn without one
-function drawCells(m, cells, colourOf, keepLayers) {
+function drawCells(m, cells, colourOf, keepLayers, outline = OUTLINE, fillOpacity = 0.75) {
   m._cells.clearLayers();
   for (const o of cells) {
     const colour = colourOf(o), shape = S.shapes && S.shapes.get(o.pc);
     if (!colour || !shape) continue;
-    const layer = L.geoJSON(shape, { style: { ...OUTLINE, fillColor: colour, fillOpacity: 0.75 } })
+    const layer = L.geoJSON(shape, { style: { ...outline, fillColor: colour, fillOpacity } })
       .bindTooltip(cellTip(o), { sticky: true, direction: "top", offset: [0, -6] })
-      .on("mouseover", () => layer.setStyle(HILITE)).on("mouseout", () => layer.setStyle(OUTLINE))
+      .on("mouseover", () => layer.setStyle(HILITE)).on("mouseout", () => layer.setStyle(outline))
       .addTo(m._cells);
     if (keepLayers) S.layers.set(o.pc, layer);
   }
@@ -412,8 +475,35 @@ function missingHint() {
   return miss.length ? `<div class="hint" style="color:#b2182b">${miss.length} postcode${miss.length > 1 ? "s" : ""} not in the boundary file, not drawn: ${miss.slice(0, 12).join(", ")}${miss.length > 12 ? "…" : ""}</div>` : "";
 }
 
+const PT_OUTLINE = { color: "#8a8a84", weight: 0.8 };
+// Points view: the future file's rows, kept-from-today vs generated, over the postcode outlines
+function renderPoints(cells) {
+  const ds = S.fut || S.base, real = [], gen = [];
+  for (let i = 0; i < ds.n; i++) {
+    if (!prodOk(ds, i) || !facOk(ds, i)) continue;
+    (ds.syn[i] ? gen : real).push(i);
+  }
+  const groups = [];
+  if (S.pts !== "gen") groups.push({ ds, idx: real, colour: PT_REAL });
+  if (S.pts !== "real") groups.push({ ds, idx: gen, colour: PT_GEN });   // drawn last, on top
+  points.setGroups(groups);
+  if (!map1.hasLayer(points)) points.addTo(map1);
+  if (S.shapes) drawCells(map1, cells, () => "#ffffff", true, PT_OUTLINE, 0.05); else map1._cells.clearLayers();
+  map2._cells.clearLayers();
+  const item = (key, colour, label, n) =>
+    `<div class="it tg${S.pts === "both" || S.pts === key ? "" : " off"}" data-pts="${key}"><span class="dot" style="background:${colour}"></span>${label}<span class="n">${fmt(n)}</span></div>`;
+  legend._div.innerHTML = `<div class="t">Delivery points · ${esc(ds.name)}</div>` +
+    item("real", PT_REAL, S.fut ? "Real (kept from today)" : "Real", real.length) +
+    (S.fut ? item("gen", PT_GEN, "Generated", gen.length) : "") +
+    `<div class="hint">Click a row to show only it. One dot per row, whatever the Count setting.</div>` +
+    (S.shapes ? missingHint() : `<div class="hint">Drop the postcode shapes to draw outlines.</div>`);
+}
+
 function renderMap(cells) {
   S.layers = new Map();
+  document.getElementById("rowPts").hidden = S.view !== "points";
+  if (S.view === "points") { document.getElementById("slotGeo").classList.remove("need"); renderPoints(cells); return; }
+  if (map1.hasLayer(points)) map1.removeLayer(points);
   document.getElementById("slotGeo").classList.toggle("need", !S.shapes);
   if (!S.shapes) {
     map1._cells.clearLayers(); map2._cells.clearLayers();
@@ -442,6 +532,8 @@ function renderMap(cells) {
       `<div class="grad" style="background:linear-gradient(90deg,#dfe7fa,#14306e)"></div><div class="ends"><span>0</span><span>${fmt(hi)}+</span></div>` +
       `<div class="hint">Same colour scale on both maps</div>`;
   }
+  if (S.b && S.b.derived)
+    leg += `<div class="hint">No base CSV: today = the future file's real points. A postcode that shrinks shows as flat (×1.00).</div>`;
   leg += missingHint();
   if (S.view !== "split") map2._cells.clearLayers();
   legend._div.innerHTML = leg;
@@ -472,14 +564,15 @@ function buildMarkers() {
 
 // ---------- side panel ----------
 function renderPanel(A) {
-  const both = S.base && S.fut;
-  document.getElementById("kBase").textContent = S.base ? fmt(A.tb) : "–";
+  const both = S.b && S.fut;
+  document.getElementById("kBase").textContent = S.b ? fmt(A.tb) : "–";
   document.getElementById("kFut").textContent = S.fut ? fmt(A.tf) : "–";
   document.getElementById("kGrow").textContent = both ? ratio(A.tf, A.tb) : "–";
   document.getElementById("kAdd").innerHTML = both ? signed(A.tf - A.tb) : "–";
   const prodLabel = document.getElementById("prod").selectedOptions[0]?.textContent || "All products";
   const facLabel = S.selected.size ? [...S.selected].map(f => facs[f].name).join(", ") : "All facilities";
-  document.getElementById("kScope").textContent = `${facLabel} · ${prodLabel} · ${unit()}`;
+  document.getElementById("kScope").textContent = `${facLabel} · ${prodLabel} · ${unit()}` +
+    (S.b && S.b.derived ? " · base = real points in the future file (shrinking postcodes read as flat)" : "");
 
   // facilities
   const rows = facs.map((F, f) => ({ f, ...A.perFac[f] })).filter(r => r.b || r.fu).sort((a, b) => b.fu - a.fu || b.b - a.b);
@@ -591,6 +684,13 @@ seg("segView", "view", () => {
   setTimeout(() => { map1.invalidateSize(); map2.invalidateSize(); map2.setView(map1.getCenter(), map1.getZoom(), { animate: false }); }, 0);
 });
 seg("segMeasure", "measure");
+seg("segPts", "pts");
+legend._div.addEventListener("click", e => {             // legend rows toggle real / generated
+  const k = e.target.closest("[data-pts]")?.dataset.pts; if (!k) return;
+  S.pts = S.pts === k ? "both" : k;
+  document.querySelectorAll("#segPts button").forEach(b => b.classList.toggle("on", b.dataset.v === S.pts));
+  refresh(false);
+});
 document.getElementById("prod").onchange = e => { S.prod = e.target.value; refresh(false); };
 document.getElementById("showAll").onclick = () => { S.selected.clear(); refresh(true); };
 document.getElementById("facRows").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) toggleFac(+tr.dataset.f, e); });
