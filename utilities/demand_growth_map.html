@@ -27,7 +27,7 @@
   h1 { font-size: 15px; margin: 0 0 8px; }
   h2 { font-size: 11px; margin: 0; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
   .bh { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .slots { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .slot { border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; min-width: 0; }
   .slot:hover { background: var(--hover); }
   .slot b { display: block; font-size: 12px; }
@@ -81,10 +81,19 @@
   .legend .bx { width: 14px; height: 12px; border-radius: 2px; flex: none; }
   .legend .grad { height: 12px; border-radius: 3px; margin: 2px 0; }
   .legend .ends { display: flex; justify-content: space-between; color: var(--muted); }
-  .fac-badge { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
-    border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45); color: #fff; font: 700 10px system-ui; }
-  .fac-badge.off { opacity: .35; }
   .leaflet-tooltip { font: 12px system-ui; }
+  .pc-pop .leaflet-popup-content-wrapper, .pc-pop .leaflet-popup-tip { background: var(--panel); color: var(--ink);
+    box-shadow: 0 3px 14px rgba(0,0,0,.25); }
+  .pc-pop .leaflet-popup-content-wrapper { border-radius: 8px; border: 1px solid var(--line); }
+  .pc-pop .leaflet-popup-content { margin: 10px 12px; font: 12px/1.35 system-ui, -apple-system, "Segoe UI", sans-serif; min-width: 280px; }
+  .pc-pop a.leaflet-popup-close-button { color: var(--muted); }
+  .pop-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 18px 6px 0; }
+  .pop-h b { font-size: 14px; }
+  .pop-h span { font-size: 13px; font-weight: 600; }
+  .pop table th { padding: 3px 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; }
+  .pop table td { padding: 3px 5px; }
+  .pop tfoot td { border-top: 1px solid var(--line); }
+  .pop-f { color: var(--muted); font-size: 11px; margin-top: 6px; }
   .pts { pointer-events: none; }
   .legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 1px solid rgba(0,0,0,.25); }
   .legend .it.tg { cursor: pointer; user-select: none; }
@@ -109,47 +118,46 @@
     <div class="blk">
       <h1>Demand growth by postcode</h1>
       <div class="slots">
-        <div class="slot" id="slotBase"><b>Base CSV <i class="muted" style="font-weight:400">optional</i></b><span>click or drop — e.g. melbourne_catchment.csv</span></div>
-        <div class="slot" id="slotFut"><b>Future CSV</b><span>click or drop — e.g. future_demand.csv</span></div>
+        <div class="slot" id="slotGrow"><b>Growth CSV</b><span>click or drop — postcode_growth.csv</span></div>
+        <div class="slot" id="slotFut"><b>Future CSV</b><span>click or drop — future_demand.csv</span></div>
+        <div class="slot" id="slotDp"><b>Delivery points <i class="muted" style="font-weight:400">optional</i></b><span>delivery_points.csv — parcel count only</span></div>
         <div class="slot" id="slotGeo"><b>Postcode shapes</b><span>AP_Postcodes_simplified.geojson</span></div>
       </div>
-      <div class="hint" id="loadHint">The future CSV and the postcode shapes are enough: without a base CSV, today = the future file's real (not generated) points. Drop files together or one at a time — the CSV with an <code>is_synthetic</code> column is the future, a <code>.geojson</code> is the shapes (from <code>utilities/convert_postcode_boundaries.py</code>).</div>
+      <div class="hint" id="loadHint">Base and target come from the growth file (the forecast's FY26 and FY42 volume per postcode and product); future is the generated file's articles. <code>delivery_points.csv</code> is used only for today's parcel count mix. Drop files together or one at a time: a CSV with <code>v_from</code>/<code>v_to</code> is the growth file, one with <code>is_synthetic</code> the future, any other CSV the delivery points, a <code>.geojson</code> the shapes.</div>
     </div>
     <div class="blk">
       <div class="row"><label>Map</label>
         <span class="seg" id="segView"><button data-v="growth" class="on">Growth ×</button><button data-v="added">Added</button><button data-v="split">Base | Future</button><button data-v="points">Points</button></span></div>
       <div class="row" id="rowPts" hidden><label>Show</label>
         <span class="seg" id="segPts"><button data-v="both" class="on">Both</button><button data-v="real">Real</button><button data-v="gen">Generated</button></span></div>
-      <div class="row"><label>Count</label>
-        <span class="seg" id="segMeasure"><button data-v="points" class="on">Delivery points</button><button data-v="parcels">Parcels</button></span></div>
-      <div class="row"><label>Product</label><select id="prod"><option value="all">All products</option></select>
-        <button id="showAll">Show all facilities</button></div>
+      <div class="row"><label>Product</label><select id="prod"><option value="all">All products</option></select></div>
     </div>
     <div class="blk">
       <div class="kpis">
         <div class="kpi"><div class="v" id="kBase">–</div><div class="l">Base</div></div>
+        <div class="kpi"><div class="v" id="kTgt">–</div><div class="l">Target</div></div>
         <div class="kpi"><div class="v" id="kFut">–</div><div class="l">Future</div></div>
         <div class="kpi"><div class="v" id="kGrow">–</div><div class="l">Growth</div></div>
-        <div class="kpi"><div class="v" id="kAdd">–</div><div class="l">Added</div></div>
       </div>
-      <div class="hint" id="kScope">All facilities · all products</div>
+      <div class="hint" id="kScope">All products · volume</div>
     </div>
     <div class="blk">
-      <div class="bh"><h2>Facilities</h2><span class="hint" style="margin:0">click to isolate · Cmd/Ctrl/Shift-click to add</span></div>
-      <table><thead><tr><th>Facility</th><th>Postcodes</th><th>Base</th><th>Future</th><th>Growth</th><th>Added</th></tr></thead>
-        <tbody id="facRows"></tbody><tfoot id="facFoot"></tfoot></table>
+      <div class="bh"><h2>Product type</h2><button class="small" id="dlProd">Download CSV</button></div>
+      <table><thead><tr><th>Product type</th><th>Base</th><th>Target</th><th>Future</th><th>Growth</th><th>Base %</th><th>Future %</th><th>Δ pts</th></tr></thead>
+        <tbody id="prodRows"></tbody><tfoot id="prodFoot"></tfoot></table>
+      <div class="hint">Volume. Base and target from the growth file, future generated. Each postcode × product is set to its target, so the product mix moves on purpose. Not affected by the product filter.</div>
     </div>
     <div class="blk">
-      <div class="bh"><h2>Facility × product type</h2><button class="small" id="dlFP">Download CSV</button></div>
-      <div class="scroll"><table><thead><tr><th>Product type</th><th>Base</th><th>Future</th><th>Growth</th><th>Base %</th><th>Future %</th><th>Δ pts</th></tr></thead>
-        <tbody id="fpRows"></tbody></table></div>
-      <div class="hint">Shares are within each facility. Not affected by the product filter.</div>
+      <div class="bh"><h2>Parcels per delivery</h2><button class="small" id="dlCnt">Download CSV</button></div>
+      <table><thead><tr><th>Article_count</th><th>Base points</th><th>Future points</th><th>Base %</th><th>Future %</th><th>Δ pts</th></tr></thead>
+        <tbody id="cntRows"></tbody></table>
+      <div class="hint" id="cntHint"></div>
     </div>
     <div class="blk">
-      <div class="bh"><h2>Postcodes <span id="pcCount" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2><button class="small" id="dlPC">Download CSV</button></div>
-      <div class="scroll"><table><thead><tr><th data-k="pc">Postcode</th><th data-k="fac" style="text-align:left">Facility</th><th data-k="b">Base</th><th data-k="f">Future</th><th data-k="g">Growth</th><th data-k="d">Added</th></tr></thead>
+      <div class="bh"><h2>Volume by postcode <span id="pcCount" style="text-transform:none;letter-spacing:0;font-weight:400"></span></h2><button class="small" id="dlPC">Download CSV</button></div>
+      <div class="scroll"><table><thead><tr><th data-k="pc">Postcode</th><th data-k="b">Base</th><th data-k="t">Target</th><th data-k="f">Future</th><th data-k="g">Growth</th><th data-k="sb">Base %</th><th data-k="sf">Future %</th><th data-k="ds">Δ pts</th></tr></thead>
         <tbody id="pcRows"></tbody></table></div>
-      <div class="hint">Click a column to sort, a row to find it on the map.</div>
+      <div class="hint" id="pcHint">Click a column to sort, a row to find it on the map.</div>
     </div>
   </aside>
   <div id="maps">
@@ -159,8 +167,8 @@
 </div>
 <div id="drop" class="empty">
   <div class="box">
-    <b>Drop the future CSV and the postcode shapes</b>
-    <p>The future CSV and the postcode shapes GeoJSON, together or one at a time; a base CSV is optional. The CSVs need delivery lat/lon, <code>Terminating_facility_name</code> and <code>POSTCODE</code>; <code>Product_type</code> and <code>parcel_count</code> are used when present.</p>
+    <b>Drop the growth file, the future CSV and the postcode shapes</b>
+    <p><code>outputs/future_demand/postcode_growth.csv</code> (base and target volume), <code>future_demand.csv</code> (future volume and points) and the postcode shapes GeoJSON, together or one at a time. <code>delivery_points.csv</code> is optional and gives only today's parcel count mix. Future volume = the sum of <code>Article_count</code>.</p>
     <button id="pick">Choose files…</button>
   </div>
 </div>
@@ -168,21 +176,16 @@
 
 <script>
 // ---------- constants ----------
-const PALETTE = ["#2f6fdf","#e8590c","#2b9a3e","#c2255c","#7048e8","#0c8599","#d9a400","#8f5b3a",
-                 "#e64980","#5c940d","#1864ab","#a61e4d","#495057","#f76707","#0ca678","#9c36b5"];
-const colourFor = i => i < PALETTE.length ? PALETTE[i] : `hsl(${(i * 137.508) % 360} 65% 48%)`;
-const EXPRESS_PRODUCTS = new Set(["eParcel Express"]);       // -> Express Post, everything else -> Parcel Post
-const GROUPS = ["Express Post", "Parcel Post"];
 const COLS = {
   lat:  ["del_lat","delivery_lat","lat","latitude"],
   lon:  ["del_long","del_lon","delivery_lon","delivery_long","lon","lng","longitude"],
-  fac:  ["terminating_facility_name","facility_name","facility"],
-  flat: ["terminating_lat","wh_lat","facility_lat"],
-  flon: ["terminating_long","terminating_lon","wh_lon","facility_lon"],
-  pc:   ["postcode","post_code"],
+  pc:   ["del_postcode","postcode","post_code"],
   prod: ["product_type","product"],
-  cnt:  ["parcel_count","article_count","parcels","count"],
+  cnt:  ["article_count","parcel_count","parcels","count"],
   syn:  ["is_synthetic"],
+  reg:  ["region"],
+  from: ["v_from"],
+  to:   ["v_to"],
 };
 const PT_REAL = "#2f5fd0", PT_GEN = "#e8590c";   // delivery points: kept from today vs generated
 const GROWTH_BINS = [                       // red = fewer than today, green = more
@@ -195,16 +198,19 @@ const GROWTH_BINS = [                       // red = fewer than today, green = m
   { max: 2.0,      c: "#1b7837", l: "1.7 – 2.0" },
   { max: Infinity, c: "#00441b", l: "2.0 and above" },
 ];
+const BUCKETS = [[1, "1"], [2, "2"], [3, "3"], [4, "4"], [5, "5"], [10, "6 – 10"], [20, "11 – 20"], [Infinity, "21 +"]];
+const bucket = c => BUCKETS.findIndex(b => c <= b[0]);
 
 // ---------- state ----------
-const facDict = new Map(), facs = [];       // shared by both files so filters apply to both
+// grow: the growth file (base + target volume per postcode x product); fut: the generated delivery
+// points (future volume); dp: today's delivery points, read ONLY for the parcel count mix
 const prodDict = new Map(), prods = [];
-const S = { base: null, fut: null, b: null, view: "growth", measure: "points", pts: "both", prod: "all", selected: new Set(),
-            pcCentre: new Map(), cells: [], sortKey: "d", sortDir: -1, layers: new Map(), shapes: null };
+const S = { grow: null, fut: null, dp: null, view: "growth", pts: "both", prod: "all", sel: null, reopening: false,
+            pcCentre: new Map(), cells: [], sortKey: "f", sortDir: -1, layers: new Map(), shapes: null };
 
-const idOf = (dict, list, name, make) => {
+const idOf = (dict, list, name) => {
   let i = dict.get(name);
-  if (i === undefined) { i = list.length; dict.set(name, i); list.push(make ? make(name) : name); }
+  if (i === undefined) { i = list.length; dict.set(name, i); list.push(name); }
   return i;
 };
 function findCol(fields, keys) {
@@ -216,16 +222,15 @@ const fmt = v => Math.round(v).toLocaleString();
 const esc = s => String(s).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
 const ratio = (f, b) => b ? "×" + (f / b).toFixed(2) : "–";
 const signed = v => `<span class="${v > 0 ? "up" : v < 0 ? "down" : ""}">${v > 0 ? "+" : ""}${fmt(v)}</span>`;
-const unit = () => S.measure === "points" ? "delivery points" : "parcels";
-const shortName = name => name.replace(/\s+(PARCEL DELIVERY|PARCEL DELIVERY CENTRE|PDC|DC)$/i, "");
-function initials(name) {
-  const w = name.replace(/\b(PDC|PARCEL|DELIVERY|FACILITY|DC|CENTRE|CENTER)\b/gi, "").trim().split(/\s+/).filter(Boolean);
-  return ((w[0] || name)[0] + (w[1] ? w[1][0] : (w[0] || "")[1] || "")).toUpperCase();
-}
+const dpts = v => `<span class="${v > 0.005 ? "up" : v < -0.005 ? "down" : ""}">${v >= 0 ? "+" : ""}${v.toFixed(2)}</span>`;
+const unit = () => "volume";
 
 // ---------- load ----------
 const parse = file => new Promise((res, rej) => Papa.parse(file, { header: true, skipEmptyLines: true,
   complete: r => res({ file, rows: r.data, fields: r.meta.fields || [] }), error: rej }));
+const volCols = fields => fields.filter(f => /^vol_fy\d+$/i.test(f.trim()));      // comparison_by_postcode_product.csv
+const kindOf = fields => findCol(fields, COLS.from) || volCols(fields).length >= 2 ? "grow"
+  : findCol(fields, COLS.syn) ? "fut" : "dp";
 
 async function loadFiles(fileList, forceSlot) {
   const all = [...fileList];
@@ -239,18 +244,17 @@ async function loadFiles(fileList, forceSlot) {
   hint.textContent = "Reading " + files.map(f => f.name).join(" + ") + "…";
   for (const p of await Promise.all(files.map(parse))) {
     try {
-      const ds = ingest(p.rows, p.fields, p.file.name);
-      const isFut = forceSlot ? forceSlot === "fut" : !!findCol(p.fields, COLS.syn);
-      if (isFut) S.fut = ds; else S.base = ds;
+      const kind = forceSlot || kindOf(p.fields);
+      S[kind] = kind === "grow" ? ingestGrowth(p.rows, p.fields, p.file.name) : ingest(p.rows, p.fields, p.file.name);
     } catch (e) { alert(p.file.name + ": " + e.message); }
   }
   hint.innerHTML = hintHtml;
-  for (const [id, ds] of [["slotBase", S.base], ["slotFut", S.fut]]) {
+  for (const [id, ds, what] of [["slotGrow", S.grow, "postcode × product rows"], ["slotFut", S.fut, "rows"], ["slotDp", S.dp, "rows"]]) {
     const el = document.getElementById(id);
     el.classList.toggle("ok", !!ds);
-    if (ds) el.querySelector("span").textContent = `${ds.name} · ${ds.n.toLocaleString()} rows`;
+    if (ds) el.querySelector("span").textContent = `${ds.name} · ${ds.n.toLocaleString()} ${what}`;
   }
-  if (S.base || S.fut) document.getElementById("drop").classList.remove("empty");
+  if (S.grow || S.fut) document.getElementById("drop").classList.remove("empty");
   afterLoad();
 }
 
@@ -271,30 +275,43 @@ function loadShapes(gj, name) {
   el.querySelector("span").textContent = `${name} · ${S.shapes.size.toLocaleString()} postcodes`;
 }
 
+// the growth file: one row per postcode x product with its base (v_from) and target (v_to) volume
+function ingestGrowth(rows, fields, name) {
+  const vc = volCols(fields);
+  const c = { pc: findCol(fields, COLS.pc), prod: findCol(fields, COLS.prod), reg: findCol(fields, COLS.reg),
+              from: findCol(fields, COLS.from) || vc[0], to: findCol(fields, COLS.to) || vc[1] };
+  if (!c.pc || !c.prod || !c.from || !c.to)
+    throw new Error("a growth file needs postcode, product type, v_from and v_to columns; found " + fields.join(", "));
+  const out = [];
+  for (const row of rows) {
+    const pc = parseInt(row[c.pc], 10), pt = (row[c.prod] || "").trim();
+    if (!pc || !pt || pt === "All products") continue;
+    const from = parseFloat(row[c.from]) || 0, to = parseFloat(row[c.to]) || 0;
+    out.push({ pc, prod: idOf(prodDict, prods, pt), reg: c.reg ? (row[c.reg] || "").trim() : "", from, to });
+  }
+  if (!out.length) throw new Error("no postcode × product rows");
+  return { name, rows: out, n: out.length };
+}
+
 function ingest(rows, fields, name) {
   const c = {}; for (const k in COLS) c[k] = findCol(fields, COLS[k]);
-  if (!c.lat || !c.lon || !c.fac || !c.pc)
-    throw new Error("needs delivery lat/lon, facility and postcode columns; found " + fields.join(", "));
+  if (!c.lat || !c.lon || !c.pc)
+    throw new Error("needs delivery lat/lon and postcode columns; found " + fields.join(", "));
   const n0 = rows.length;
-  const ds = { name, lat: new Float64Array(n0), lon: new Float64Array(n0), fac: new Uint16Array(n0),
-    pc: new Int32Array(n0), prod: new Int16Array(n0), grp: new Uint8Array(n0), cnt: new Float32Array(n0),
-    syn: new Uint8Array(n0) };
+  const ds = { name, lat: new Float64Array(n0), lon: new Float64Array(n0), pc: new Int32Array(n0),
+    prod: new Int16Array(n0), cnt: new Float32Array(n0), syn: new Uint8Array(n0), regs: new Set() };
   let n = 0;
   for (const row of rows) {
     const la = parseFloat(row[c.lat]), lo = parseFloat(row[c.lon]);
     if (!isFinite(la) || !isFinite(lo) || (la === 0 && lo === 0)) continue;
-    const f = idOf(facDict, facs, (row[c.fac] || "(blank)").trim() || "(blank)", nm => ({ name: nm, lat: NaN, lon: NaN }));
-    if (isNaN(facs[f].lat) && c.flat && c.flon) {
-      const a = parseFloat(row[c.flat]), b = parseFloat(row[c.flon]);
-      if (isFinite(a) && isFinite(b) && !(a === 0 && b === 0)) { facs[f].lat = a; facs[f].lon = b; }
-    }
     const pt = c.prod ? ((row[c.prod] || "(blank)").trim() || "(blank)") : "(all)";
     const ct = c.cnt ? parseFloat(row[c.cnt]) : 1;
-    ds.lat[n] = la; ds.lon[n] = lo; ds.fac[n] = f;
+    ds.lat[n] = la; ds.lon[n] = lo;
     ds.pc[n] = parseInt(row[c.pc], 10) || -1;
-    ds.prod[n] = idOf(prodDict, prods, pt); ds.grp[n] = EXPRESS_PRODUCTS.has(pt) ? 0 : 1;
+    ds.prod[n] = idOf(prodDict, prods, pt);
     ds.cnt[n] = isFinite(ct) ? ct : 1;
     ds.syn[n] = c.syn && /^(true|1|yes)$/i.test(String(row[c.syn]).trim()) ? 1 : 0;
+    if (c.reg) ds.regs.add((row[c.reg] || "").trim());
     n++;
   }
   if (!n) throw new Error("no rows with valid coordinates");
@@ -302,83 +319,62 @@ function ingest(rows, fields, name) {
   return ds;
 }
 
-// no base CSV: today = the future file's real rows. Exact for growing cells (every point is kept),
-// but a shrinking cell lost points the future file no longer has, so it reads as flat
-function deriveBase(fut) {
-  const keep = []; for (let i = 0; i < fut.n; i++) if (!fut.syn[i]) keep.push(i);
-  const ds = { name: "real points of " + fut.name, derived: true, n: keep.length };
-  for (const k of ["lat", "lon", "fac", "pc", "prod", "grp", "cnt", "syn"])
-    ds[k] = fut[k].constructor.from(keep, i => fut[k][i]);
-  return ds;
-}
-
 function afterLoad() {
-  S.b = S.base || (S.fut ? deriveBase(S.fut) : null);
-  const slot = document.getElementById("slotBase");
-  if (!S.base) slot.querySelector("span").textContent = S.fut ? `not loaded · using ${S.b.n.toLocaleString()} real points of the future file` : "click or drop — e.g. melbourne_catchment.csv";
-  const any = S.base || S.fut;
-  if (!any) { document.getElementById("drop").classList.remove("empty"); return; }
-  // facility location: from the file, else the median of its deliveries
-  facs.forEach((F, f) => {
-    if (!isNaN(F.lat)) return;
-    const la = [], lo = [];
-    for (const ds of [S.base, S.fut]) if (ds) for (let i = 0; i < ds.n; i++) if (ds.fac[i] === f) { la.push(ds.lat[i]); lo.push(ds.lon[i]); }
-    la.sort((a, b) => a - b); lo.sort((a, b) => a - b);
-    F.lat = la[la.length >> 1]; F.lon = lo[lo.length >> 1];
-  });
-  const size = facs.map(() => 0);
-  for (let i = 0; i < any.n; i++) size[any.fac[i]]++;
-  facs.map((_, i) => i).sort((a, b) => size[b] - size[a]).forEach((f, r) => facs[f].colour = colourFor(r));
-  // postcode centre = mean of its delivery points (both files share addresses)
+  if (!S.grow && !S.fut) { document.getElementById("drop").classList.remove("empty"); return; }
+  // the growth file covers every region and product; keep what the future file was built for
+  S.scopeProds = S.fut ? new Set(S.fut.prod) : null;
+  S.scopeRegs = S.fut && S.fut.regs.size ? S.fut.regs : null;
+  document.getElementById("slotGrow").classList.toggle("need", !S.grow);
+  // postcode centre = mean of its delivery points
   const acc = new Map();
-  for (const ds of [S.base, S.fut]) if (ds) for (let i = 0; i < ds.n; i++) {
+  for (const ds of [S.fut, S.dp]) if (ds) for (let i = 0; i < ds.n; i++) {
     let o = acc.get(ds.pc[i]); if (!o) acc.set(ds.pc[i], o = [0, 0, 0]);
     o[0] += ds.lat[i]; o[1] += ds.lon[i]; o[2]++;
   }
   S.pcCentre = new Map([...acc].map(([k, o]) => [k, [o[0] / o[2], o[1] / o[2]]]));
   const sel = document.getElementById("prod"), was = S.prod;
-  sel.innerHTML = `<option value="all">All products</option><option value="g0">Express Post (group)</option><option value="g1">Parcel Post (group)</option>` +
-    prods.filter(p => p !== "(all)").map(p => `<option value="p${prodDict.get(p)}">${esc(p)}</option>`).join("");
+  const shown = prods.map((p, i) => i).filter(i => prods[i] !== "(all)" && (!S.scopeProds || S.scopeProds.has(i)));
+  sel.innerHTML = `<option value="all">All products</option>` + shown.map(i => `<option value="p${i}">${esc(prods[i])}</option>`).join("");
   sel.value = [...sel.options].some(o => o.value === was) ? was : "all";
   S.prod = sel.value;
-  document.getElementById("tag1").textContent = "Base · " + (S.b ? S.b.name : "not loaded");
+  document.getElementById("tag1").textContent = "Base · " + (S.grow ? S.grow.name : "growth file not loaded");
   document.getElementById("tag2").textContent = "Future · " + (S.fut ? S.fut.name : "not loaded");
-  buildMarkers();
   refresh(true);
 }
 
 // ---------- aggregation ----------
-const prodOk = (ds, i) => S.prod === "all" ? true : S.prod[0] === "g" ? ds.grp[i] === +S.prod.slice(1) : ds.prod[i] === +S.prod.slice(1);
-const facOk = (ds, i) => !S.selected.size || S.selected.has(ds.fac[i]);
-const val = (ds, i) => S.measure === "points" ? 1 : ds.cnt[i];
+const prodIdOk = p => S.prod === "all" || p === +S.prod.slice(1);
+const prodOk = (ds, i) => prodIdOk(ds.prod[i]);
+const inScope = r => (!S.scopeProds || S.scopeProds.has(r.prod)) && (!S.scopeRegs || S.scopeRegs.has(r.reg));
 
-// one pass over both files -> postcode cells (map + postcode table), facility totals, facility x product
+// postcode cells (map + postcode table), product totals [base, future, target], parcels-per-delivery
 function aggregate() {
-  const cells = new Map(), perFac = facs.map(() => ({ b: 0, fu: 0, pcs: new Set() })), fp = new Map();
-  let tb = 0, tf = 0;
-  for (const [ds, side] of [[S.b, "b"], [S.fut, "f"]]) {
-    if (!ds) continue;
-    for (let i = 0; i < ds.n; i++) {
-      const v = val(ds, i), f = ds.fac[i], pOk = prodOk(ds, i), fOk = facOk(ds, i);
-      if (pOk) { perFac[f][side === "b" ? "b" : "fu"] += v; perFac[f].pcs.add(ds.pc[i]); }
-      if (fOk) {                                                           // facility x product ignores the product filter
-        const k = f * 1000 + ds.prod[i];
-        let o = fp.get(k); if (!o) fp.set(k, o = { f, p: ds.prod[i], b: 0, f2: 0 });
-        if (side === "b") o.b += v; else o.f2 += v;
-      }
-      if (!pOk || !fOk) continue;
-      if (side === "b") tb += v; else tf += v;
-      let o = cells.get(ds.pc[i]);
-      if (!o) cells.set(ds.pc[i], o = { pc: ds.pc[i], b: 0, f: 0, g: [[0, 0], [0, 0]], fac: new Map() });
-      o[side] += v; o.g[ds.grp[i]][side === "b" ? 0 : 1] += v;
-      o.fac.set(f, (o.fac.get(f) || 0) + v);
-    }
+  const cells = new Map(), prodT = new Map(), cnt = BUCKETS.map(() => [0, 0]);
+  let tb = 0, tt = 0, tf = 0;
+  const cell = pc => { let o = cells.get(pc); if (!o) cells.set(pc, o = { pc, b: 0, t: 0, f: 0, g: new Map() }); return o; };
+  const part = (m, p) => { let g = m.get(p); if (!g) m.set(p, g = [0, 0, 0]); return g; };
+  if (S.grow) for (const r of S.grow.rows) {
+    if (!inScope(r) || !(r.from || r.to)) continue;
+    const pr = part(prodT, r.prod); pr[0] += r.from; pr[2] += r.to;      // the product table ignores the product filter
+    if (!prodIdOk(r.prod)) continue;
+    const o = cell(r.pc), g = part(o.g, r.prod);
+    o.b += r.from; o.t += r.to; g[0] += r.from; g[2] += r.to; tb += r.from; tt += r.to;
   }
+  if (S.fut) for (let i = 0; i < S.fut.n; i++) {
+    const v = S.fut.cnt[i];
+    part(prodT, S.fut.prod[i])[1] += v;
+    if (!prodOk(S.fut, i)) continue;
+    cnt[bucket(v)][1]++;
+    const o = cell(S.fut.pc[i]);
+    o.f += v; part(o.g, S.fut.prod[i])[1] += v; tf += v;
+  }
+  if (S.dp) for (let i = 0; i < S.dp.n; i++)                             // today's parcel count mix, nothing else
+    if (prodOk(S.dp, i) && (!S.scopeProds || S.scopeProds.has(S.dp.prod[i]))) cnt[bucket(S.dp.cnt[i])][0]++;
   for (const o of cells.values()) {
-    o.d = o.f - o.b; o.gr = o.b ? o.f / o.b : (o.f ? Infinity : 0);
-    o.top = [...o.fac].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+    o.d = o.f - o.b; o.gr = o.b ? o.f / o.b : (o.f ? Infinity : 0); o.gap = o.f - o.t;
+    o.sb = tb ? o.b / tb * 100 : 0; o.sf = tf ? o.f / tf * 100 : 0; o.ds = o.sf - o.sb;
   }
-  return { cells: [...cells.values()], perFac, fp: [...fp.values()], tb, tf };
+  return { cells: [...cells.values()], prodT, cnt, tb, tt, tf };
 }
 
 // ---------- maps ----------
@@ -388,7 +384,6 @@ function makeMap(id) {
     { maxZoom: 16, attribution: "Tiles &copy; Esri" }).addTo(m);
   m.createPane("points").style.zIndex = 450;                 // above the postcode shapes, below the badges
   m._cells = L.layerGroup().addTo(m);
-  m._facs = L.layerGroup().addTo(m);
   return m;
 }
 
@@ -447,24 +442,56 @@ function mix(t, from, to) {
 const growthColour = o => !o.b ? (o.f ? GROWTH_BINS[GROWTH_BINS.length - 1].c : null) : GROWTH_BINS.find(x => o.gr < x.max).c;
 const quant = (arr, q) => { if (!arr.length) return 1; const a = arr.slice().sort((x, y) => x - y); return a[Math.floor(q * (a.length - 1))]; };
 
-function cellTip(o) {
-  const facLine = o.top.length ? esc(facs[o.top[0]].name) + (o.top.length > 1 ? ` <i>+${o.top.length - 1} other</i>` : "") : "";
-  const gl = (g, i) => (g[0] || g[1]) ? `<br>${GROUPS[i]}: ${fmt(g[0])} → ${fmt(g[1])} (${ratio(g[1], g[0])})` : "";
-  return `<b>Postcode ${o.pc}</b> · ${facLine}<br>${fmt(o.b)} → ${fmt(o.f)} ${unit()} · <b>${ratio(o.f, o.b)}</b> · ${o.d >= 0 ? "+" : ""}${fmt(o.d)}` +
-    gl(o.g[0], 0) + gl(o.g[1], 1);
+// hover: just which postcode; the detail is in the popup a click opens
+const cellTip = o => `<b>${o.pc}</b> · ${ratio(o.f, o.b)}`;
+
+function cellPopup(o) {
+  const rows = [...o.g].sort((x, y) => y[1][1] - x[1][1] || y[1][0] - x[1][0]).map(([p, g]) =>
+    `<tr><td>${esc(prods[p])}</td><td>${fmt(g[0])}</td><td>${fmt(g[2])}</td><td>${fmt(g[1])}</td><td>${ratio(g[1], g[0])}</td><td>${signed(g[1] - g[0])}</td></tr>`).join("");
+  const prodLabel = document.getElementById("prod").selectedOptions[0]?.textContent || "All products";
+  return `<div class="pop"><div class="pop-h"><b>Postcode ${o.pc}</b><span>${ratio(o.f, o.b)}</span></div>` +
+    `<table><thead><tr><th>Product</th><th>Base</th><th>Target</th><th>Future</th><th>Growth</th><th>Added</th></tr></thead><tbody>${rows}</tbody>` +
+    (o.g.size > 1 ? `<tfoot><tr><td>Total</td><td>${fmt(o.b)}</td><td>${fmt(o.t)}</td><td>${fmt(o.f)}</td><td>${ratio(o.f, o.b)}</td><td>${signed(o.d)}</td></tr></tfoot>` : "") +
+    `</table><div class="pop-f">Volume · ${esc(prodLabel)} · base and target from the growth file · share of the shown total ${o.sb.toFixed(2)}% → ${o.sf.toFixed(2)}%</div></div>`;
+}
+
+// one postcode selected at a time: outlined on both maps, its row marked, one popup
+function markRow(pc) {
+  document.querySelectorAll("#pcRows tr.sel").forEach(x => x.classList.remove("sel"));
+  const tr = pc == null ? null : document.querySelector(`#pcRows tr[data-pc="${pc}"]`);
+  if (tr) { tr.classList.add("sel"); tr.scrollIntoView({ block: "nearest" }); }
+}
+function selectPc(pc, m = map1, at) {
+  for (const mm of [map1, map2]) { const old = mm._byPc && mm._byPc.get(S.sel); if (old) old.setStyle(mm._outline); }
+  S.sel = pc;
+  if (pc == null) { markRow(null); return; }
+  for (const mm of [map1, map2]) { const l = mm._byPc && mm._byPc.get(pc); if (l) { l.setStyle(HILITE); l.bringToFront(); } }
+  markRow(pc);
+  const o = S.cells.find(c => c.pc === pc), layer = m._byPc && m._byPc.get(pc);
+  const ll = at || (layer ? layer.getBounds().getCenter() : S.pcCentre.get(pc));
+  if (!o || !ll) return;
+  S.reopening = true;                                   // the popup it replaces must not clear the selection
+  (m === map1 ? map2 : map1).closePopup();
+  const pop = L.popup({ maxWidth: 400, autoPanPadding: [24, 24], className: "pc-pop" }).setLatLng(ll).setContent(cellPopup(o));
+  pop._pc = pc;
+  pop.openOn(m);
+  S.reopening = false;
 }
 
 const OUTLINE = { color: "#ffffff", weight: 0.8 }, HILITE = { color: "#14213d", weight: 3 };
 // postcodes are always drawn as their Australia Post boundary; nothing is drawn without one
 function drawCells(m, cells, colourOf, keepLayers, outline = OUTLINE, fillOpacity = 0.75) {
   m._cells.clearLayers();
+  m._byPc = new Map(); m._outline = outline;
   for (const o of cells) {
     const colour = colourOf(o), shape = S.shapes && S.shapes.get(o.pc);
     if (!colour || !shape) continue;
     const layer = L.geoJSON(shape, { style: { ...outline, fillColor: colour, fillOpacity } })
       .bindTooltip(cellTip(o), { sticky: true, direction: "top", offset: [0, -6] })
-      .on("mouseover", () => layer.setStyle(HILITE)).on("mouseout", () => layer.setStyle(outline))
+      .on("mouseover", () => layer.setStyle(HILITE)).on("mouseout", () => { if (S.sel !== o.pc) layer.setStyle(outline); })
+      .on("click", e => { L.DomEvent.stopPropagation(e); layer.closeTooltip(); selectPc(o.pc, m, e.latlng); })
       .addTo(m._cells);
+    m._byPc.set(o.pc, layer);
     if (keepLayers) S.layers.set(o.pc, layer);
   }
 }
@@ -478,9 +505,10 @@ function missingHint() {
 const PT_OUTLINE = { color: "#8a8a84", weight: 0.8 };
 // Points view: the future file's rows, kept-from-today vs generated, over the postcode outlines
 function renderPoints(cells) {
-  const ds = S.fut || S.base, real = [], gen = [];
+  const ds = S.fut, real = [], gen = [];
+  if (!ds) { points.setGroups([]); legend._div.innerHTML = `<div class="t">Load the future CSV to see its delivery points</div>`; return; }
   for (let i = 0; i < ds.n; i++) {
-    if (!prodOk(ds, i) || !facOk(ds, i)) continue;
+    if (!prodOk(ds, i)) continue;
     (ds.syn[i] ? gen : real).push(i);
   }
   const groups = [];
@@ -495,7 +523,7 @@ function renderPoints(cells) {
   legend._div.innerHTML = `<div class="t">Delivery points · ${esc(ds.name)}</div>` +
     item("real", PT_REAL, S.fut ? "Real (kept from today)" : "Real", real.length) +
     (S.fut ? item("gen", PT_GEN, "Generated", gen.length) : "") +
-    `<div class="hint">Click a row to show only it. One dot per row, whatever the Count setting.</div>` +
+    `<div class="hint">Click a row to show only it. One dot per delivery point of the future file.</div>` +
     (S.shapes ? missingHint() : `<div class="hint">Drop the postcode shapes to draw outlines.</div>`);
 }
 
@@ -532,8 +560,6 @@ function renderMap(cells) {
       `<div class="grad" style="background:linear-gradient(90deg,#dfe7fa,#14306e)"></div><div class="ends"><span>0</span><span>${fmt(hi)}+</span></div>` +
       `<div class="hint">Same colour scale on both maps</div>`;
   }
-  if (S.b && S.b.derived)
-    leg += `<div class="hint">No base CSV: today = the future file's real points. A postcode that shrinks shows as flat (×1.00).</div>`;
   leg += missingHint();
   if (S.view !== "split") map2._cells.clearLayers();
   legend._div.innerHTML = leg;
@@ -549,98 +575,75 @@ function fitTo(cells) {
   if (b.isValid()) map1.fitBounds(b.pad(0.03), { animate: false });
 }
 
-function buildMarkers() {
-  for (const m of [map1, map2]) {
-    m._facs.clearLayers();
-    facs.forEach((F, f) => {
-      if (isNaN(F.lat)) return;
-      const icon = L.divIcon({ className: "", iconSize: [24, 24], iconAnchor: [12, 12],
-        html: `<div class="fac-badge" data-f="${f}" style="background:${F.colour}">${esc(initials(F.name))}</div>` });
-      L.marker([F.lat, F.lon], { icon, riseOnHover: true }).bindTooltip(esc(F.name), { direction: "top", offset: [0, -12] })
-        .on("click", e => toggleFac(f, e.originalEvent)).addTo(m._facs);
-    });
-  }
-}
-
 // ---------- side panel ----------
+function shares(rows) {                       // rows [{b, f}] -> + sb, sf, ds (% of the column total)
+  const b = rows.reduce((a, r) => a + r.b, 0), f = rows.reduce((a, r) => a + r.f, 0);
+  for (const r of rows) { r.sb = b ? r.b / b * 100 : 0; r.sf = f ? r.f / f * 100 : 0; r.ds = r.sf - r.sb; }
+  return { rows, b, f };
+}
+const maxAbs = rows => rows.reduce((a, r) => Math.max(a, Math.abs(r.ds)), 0).toFixed(2);
+
 function renderPanel(A) {
-  const both = S.b && S.fut;
-  document.getElementById("kBase").textContent = S.b ? fmt(A.tb) : "–";
+  document.getElementById("kBase").textContent = S.grow ? fmt(A.tb) : "–";
+  document.getElementById("kTgt").textContent = S.grow ? fmt(A.tt) : "–";
   document.getElementById("kFut").textContent = S.fut ? fmt(A.tf) : "–";
-  document.getElementById("kGrow").textContent = both ? ratio(A.tf, A.tb) : "–";
-  document.getElementById("kAdd").innerHTML = both ? signed(A.tf - A.tb) : "–";
+  document.getElementById("kGrow").textContent = S.grow && S.fut ? ratio(A.tf, A.tb) : "–";
   const prodLabel = document.getElementById("prod").selectedOptions[0]?.textContent || "All products";
-  const facLabel = S.selected.size ? [...S.selected].map(f => facs[f].name).join(", ") : "All facilities";
-  document.getElementById("kScope").textContent = `${facLabel} · ${prodLabel} · ${unit()}` +
-    (S.b && S.b.derived ? " · base = real points in the future file (shrinking postcodes read as flat)" : "");
+  document.getElementById("kScope").innerHTML = `${esc(prodLabel)} · volume · base and target from the growth file` +
+    (S.grow && S.fut ? ` · future vs target ${signed(A.tf - A.tt)}` : "") +
+    (S.grow ? "" : ` · <span style="color:#b2182b">load the growth file for base and target</span>`);
 
-  // facilities
-  const rows = facs.map((F, f) => ({ f, ...A.perFac[f] })).filter(r => r.b || r.fu).sort((a, b) => b.fu - a.fu || b.b - a.b);
-  document.getElementById("facRows").innerHTML = rows.map(r => {
-    const cls = "click " + (S.selected.has(r.f) ? "sel" : S.selected.size ? "dim" : "");
-    return `<tr data-f="${r.f}" class="${cls}"><td><span class="sw" style="background:${facs[r.f].colour}"></span>${esc(facs[r.f].name)}</td>` +
-      `<td>${r.pcs.size}</td><td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td>${signed(r.fu - r.b)}</td></tr>`;
-  }).join("");
-  const sb = rows.reduce((a, r) => a + r.b, 0), sf = rows.reduce((a, r) => a + r.fu, 0);
-  document.getElementById("facFoot").innerHTML =
-    `<tr><td>Total</td><td>${new Set(rows.flatMap(r => [...r.pcs])).size}</td><td>${fmt(sb)}</td><td>${fmt(sf)}</td><td>${ratio(sf, sb)}</td><td>${signed(sf - sb)}</td></tr>`;
+  // product type: base / target / future volume, shares base vs future
+  const P = shares([...A.prodT].map(([p, [b, f, t]]) => ({ name: prods[p], b, f, t })).sort((x, y) => y.f - x.f || y.b - x.b));
+  const pt = P.rows.reduce((a, r) => a + r.t, 0);
+  S.prodTable = P.rows;
+  document.getElementById("prodRows").innerHTML = P.rows.map(r =>
+    `<tr><td>${esc(r.name)}</td><td>${fmt(r.b)}</td><td>${fmt(r.t)}</td><td>${fmt(r.f)}</td><td>${ratio(r.f, r.b)}</td>` +
+    `<td>${r.sb.toFixed(2)}</td><td>${r.sf.toFixed(2)}</td><td>${dpts(r.ds)}</td></tr>`).join("");
+  document.getElementById("prodFoot").innerHTML =
+    `<tr><td>Total</td><td>${fmt(P.b)}</td><td>${fmt(pt)}</td><td>${fmt(P.f)}</td><td>${ratio(P.f, P.b)}</td><td>100</td><td>100</td><td></td></tr>`;
 
-  // facility x product: an "All" block first, then one block per facility
-  S.fpTable = fpTable(A.fp);
-  document.getElementById("fpRows").innerHTML = S.fpTable.map(r => r.head
-    ? `<tr class="grp"><td>${r.f < 0 ? "All shown facilities" : `<span class="sw" style="background:${facs[r.f].colour}"></span>` + esc(facs[r.f].name)}</td>` +
-      `<td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td></td><td></td><td></td></tr>`
-    : `<tr><td class="ind">${esc(prods[r.p])} <span class="muted">· ${EXPRESS_PRODUCTS.has(prods[r.p]) ? "Express" : "Parcel"}</span></td>` +
-      `<td>${fmt(r.b)}</td><td>${fmt(r.fu)}</td><td>${ratio(r.fu, r.b)}</td><td>${r.sb.toFixed(2)}</td><td>${r.sf.toFixed(2)}</td>` +
-      `<td><span class="${r.sf - r.sb > 0.005 ? "up" : r.sf - r.sb < -0.005 ? "down" : ""}">${r.sf - r.sb >= 0 ? "+" : ""}${(r.sf - r.sb).toFixed(2)}</span></td></tr>`).join("");
+  // parcels per delivery: share of delivery points by Article_count — today from delivery_points.csv
+  const C = shares(BUCKETS.map((bk, i) => ({ name: bk[1], b: A.cnt[i][0], f: A.cnt[i][1] })).filter(r => r.b || r.f));
+  S.cntTable = C.rows;
+  document.getElementById("cntRows").innerHTML = C.rows.map(r =>
+    `<tr><td>${r.name}</td><td>${S.dp ? fmt(r.b) : "–"}</td><td>${fmt(r.f)}</td><td>${S.dp ? r.sb.toFixed(2) : "–"}</td><td>${r.sf.toFixed(2)}</td><td>${S.dp ? dpts(r.ds) : "–"}</td></tr>`).join("");
+  document.getElementById("cntHint").innerHTML = !S.dp
+    ? "Load <code>delivery_points.csv</code> for today's mix — it is the only thing that file is used for."
+    : `Base = today's delivery points (<code>${esc(S.dp.name)}</code>). Max |Δ| <b>${maxAbs(C.rows)} pts</b>. ` + (S.prod === "all"
+      ? "The generator holds this mix <i>within each product</i>; across all products it also moves with the product mix (OOH included). Pick a product to check the held mix."
+      : "Held for this product by the generator.");
 
   // postcodes
   renderPostcodes(A.cells);
-  document.querySelectorAll(".fac-badge").forEach(el => el.classList.toggle("off", S.selected.size > 0 && !S.selected.has(+el.dataset.f)));
-}
-
-function fpTable(fp) {
-  const block = (f, items) => {
-    const byP = new Map();
-    for (const o of items) { const x = byP.get(o.p) || { b: 0, fu: 0 }; x.b += o.b; x.fu += o.f2; byP.set(o.p, x); }
-    const b = [...byP.values()].reduce((a, x) => a + x.b, 0), fu = [...byP.values()].reduce((a, x) => a + x.fu, 0);
-    return [{ head: true, f, b, fu },
-      ...[...byP].sort((x, y) => y[1].b - x[1].b || y[1].fu - x[1].fu).map(([p, x]) =>
-        ({ f, p, b: x.b, fu: x.fu, sb: b ? x.b / b * 100 : 0, sf: fu ? x.fu / fu * 100 : 0 }))];
-  };
-  const byF = new Map();
-  for (const o of fp) { if (!byF.has(o.f)) byF.set(o.f, []); byF.get(o.f).push(o); }
-  const order = [...byF.keys()].sort((a, b) => byF.get(b).reduce((s, o) => s + o.f2, 0) - byF.get(a).reduce((s, o) => s + o.f2, 0));
-  // the "all" block only adds something when more than one facility is shown
-  return [...(order.length > 1 ? block(-1, fp) : []), ...order.flatMap(f => block(f, byF.get(f)))];
+  const gap = A.cells.reduce((a, o) => Math.max(a, Math.abs(o.gap)), 0);
+  document.getElementById("pcHint").innerHTML = (S.grow && S.fut ? `Future vs target: max |gap| <b>${gap.toFixed(1)}</b> per postcode. ` : "") +
+    `Share of the shown volume: max |Δ| <b>${maxAbs(A.cells)} pts</b>. Click a column to sort, a row to find it on the map.`;
 }
 
 function renderPostcodes(cells) {
   const k = S.sortKey, dir = S.sortDir;
-  const keyOf = o => k === "pc" ? o.pc : k === "fac" ? facs[o.top[0]]?.name || "" : k === "g" ? (isFinite(o.gr) ? o.gr : 1e9) : o[k];
-  S.pcSorted = cells.slice().sort((a, b) => { const x = keyOf(a), y = keyOf(b); return (typeof x === "string" ? x.localeCompare(y) : x - y) * dir; });
+  const keyOf = o => k === "pc" ? o.pc : k === "g" ? (isFinite(o.gr) ? o.gr : 1e9) : o[k];
+  S.pcSorted = cells.slice().sort((a, b) => (keyOf(a) - keyOf(b)) * dir);
   document.getElementById("pcCount").textContent = `(${cells.length})`;
   document.getElementById("pcRows").innerHTML = S.pcSorted.map(o =>
-    `<tr class="click" data-pc="${o.pc}"><td>${o.pc}</td><td class="wrap">${o.top.length ? esc(shortName(facs[o.top[0]].name)) + (o.top.length > 1 ? ` <span class="muted">+${o.top.length - 1}</span>` : "") : ""}</td>` +
-    `<td>${fmt(o.b)}</td><td>${fmt(o.f)}</td><td>${ratio(o.f, o.b)}</td><td>${signed(o.d)}</td></tr>`).join("");
+    `<tr class="click" data-pc="${o.pc}"><td>${o.pc}</td><td>${fmt(o.b)}</td><td>${fmt(o.t)}</td><td>${fmt(o.f)}</td><td>${ratio(o.f, o.b)}</td>` +
+    `<td>${o.sb.toFixed(2)}</td><td>${o.sf.toFixed(2)}</td><td>${dpts(o.ds)}</td></tr>`).join("");
   document.querySelectorAll("th[data-k]").forEach(th => th.classList.toggle("sorted", th.dataset.k === k));
 }
 
 function refresh(fit) {
-  if (!S.base && !S.fut) return;
+  if (!S.grow && !S.fut) return;
   const A = aggregate();
   S.cells = A.cells;
   renderPanel(A);
   renderMap(A.cells);
   if (fit) fitTo(A.cells);
-}
-
-function toggleFac(f, ev) {
-  const multi = ev && (ev.metaKey || ev.ctrlKey || ev.shiftKey);
-  if (multi) S.selected.has(f) ? S.selected.delete(f) : S.selected.add(f);
-  else if (S.selected.size === 1 && S.selected.has(f)) S.selected.clear();
-  else S.selected = new Set([f]);
-  refresh(true);
+  if (S.sel != null) {                                  // redrawn: keep the selection, refresh its popup
+    const open = map1._popup && map1.hasLayer(map1._popup) ? map1 : map2._popup && map2.hasLayer(map2._popup) ? map2 : null;
+    if (S.cells.some(o => o.pc === S.sel)) selectPc(S.sel, open || map1, open ? open._popup.getLatLng() : undefined);
+    else { map1.closePopup(); map2.closePopup(); selectPc(null); }
+  }
 }
 
 // ---------- CSV export ----------
@@ -653,21 +656,28 @@ function download(name, header, rows) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 const r4 = v => Math.round(v * 10000) / 10000;
+const shareCols = ["base_share_pct", "future_share_pct", "share_change_pts"];
+const shareVals = r => [r4(r.sb), r4(r.sf), r4(r.ds)];
 document.getElementById("dlPC").onclick = () => {
   if (!S.pcSorted) return;
-  const u = S.measure;
-  download(`postcode_comparison_${u}.csv`,
-    ["postcode", "facilities", `base_${u}`, `future_${u}`, "growth", "added", `base_express_${u}`, `future_express_${u}`, `base_parcel_${u}`, `future_parcel_${u}`],
-    S.pcSorted.map(o => [o.pc, o.top.map(f => facs[f].name).join("; "), r4(o.b), r4(o.f), o.b ? r4(o.f / o.b) : "", r4(o.d),
-      r4(o.g[0][0]), r4(o.g[0][1]), r4(o.g[1][0]), r4(o.g[1][1])]));
+  const ps = prods.map((_, p) => p).filter(p => S.pcSorted.some(o => o.g.has(p)));
+  const slug = p => prods[p].toLowerCase().replace(/\W+/g, "_");
+  download("postcode_volume.csv",
+    ["postcode", "base", "target", "future", "future_vs_base", "future_vs_base_pct", "future_vs_target", ...shareCols,
+     ...ps.flatMap(p => [`base_${slug(p)}`, `target_${slug(p)}`, `future_${slug(p)}`])],
+    S.pcSorted.map(o => [o.pc, r4(o.b), r4(o.t), r4(o.f), r4(o.d), o.b ? r4(o.d / o.b * 100) : "", r4(o.gap), ...shareVals(o),
+      ...ps.flatMap(p => { const g = o.g.get(p) || [0, 0, 0]; return [r4(g[0]), r4(g[2]), r4(g[1])]; })]));
 };
-document.getElementById("dlFP").onclick = () => {
-  if (!S.fpTable) return;
-  const u = S.measure;
-  download(`facility_product_${u}.csv`,
-    ["facility", "product_type", "product_group", `base_${u}`, `future_${u}`, "growth", "base_share_pct", "future_share_pct", "share_change_pts"],
-    S.fpTable.filter(r => !r.head).map(r => [r.f < 0 ? "ALL" : facs[r.f].name, prods[r.p], EXPRESS_PRODUCTS.has(prods[r.p]) ? GROUPS[0] : GROUPS[1],
-      r4(r.b), r4(r.fu), r.b ? r4(r.fu / r.b) : "", r4(r.sb), r4(r.sf), r4(r.sf - r.sb)]));
+document.getElementById("dlProd").onclick = () => {
+  if (!S.prodTable) return;
+  download("product_type_volume.csv", ["product_type", "base", "target", "future", "growth", ...shareCols],
+    S.prodTable.map(r => [r.name, r4(r.b), r4(r.t), r4(r.f), r.b ? r4(r.f / r.b) : "", ...shareVals(r)]));
+};
+document.getElementById("dlCnt").onclick = () => {
+  if (!S.cntTable) return;
+  const prod = S.prod === "all" ? "all_products" : prods[+S.prod.slice(1)].toLowerCase().replace(/\W+/g, "_");
+  download(`parcels_per_delivery_${prod}.csv`, ["article_count", "base_points", "future_points", ...shareCols],
+    S.cntTable.map(r => [r.name, S.dp ? r.b : "", r.f, ...(S.dp ? shareVals(r) : ["", r4(r.sf), ""])]));
 };
 
 // ---------- wiring ----------
@@ -683,7 +693,6 @@ seg("segView", "view", () => {
   document.getElementById("maps").classList.toggle("split", S.view === "split");
   setTimeout(() => { map1.invalidateSize(); map2.invalidateSize(); map2.setView(map1.getCenter(), map1.getZoom(), { animate: false }); }, 0);
 });
-seg("segMeasure", "measure");
 seg("segPts", "pts");
 legend._div.addEventListener("click", e => {             // legend rows toggle real / generated
   const k = e.target.closest("[data-pts]")?.dataset.pts; if (!k) return;
@@ -692,31 +701,26 @@ legend._div.addEventListener("click", e => {             // legend rows toggle r
   refresh(false);
 });
 document.getElementById("prod").onchange = e => { S.prod = e.target.value; refresh(false); };
-document.getElementById("showAll").onclick = () => { S.selected.clear(); refresh(true); };
-document.getElementById("facRows").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) toggleFac(+tr.dataset.f, e); });
 document.querySelector("#pcRows").closest("table").querySelector("thead").addEventListener("click", e => {
   const k = e.target.closest("th")?.dataset.k; if (!k) return;
-  if (k === S.sortKey) S.sortDir = -S.sortDir; else { S.sortKey = k; S.sortDir = k === "pc" || k === "fac" ? 1 : -1; }
+  if (k === S.sortKey) S.sortDir = -S.sortDir; else { S.sortKey = k; S.sortDir = k === "pc" ? 1 : -1; }
   renderPostcodes(S.cells);
 });
 document.getElementById("pcRows").addEventListener("click", e => {
   const tr = e.target.closest("tr"); if (!tr) return;
   const pc = +tr.dataset.pc, layer = S.layers.get(pc), c = S.pcCentre.get(pc);
-  document.querySelectorAll("#pcRows tr.sel").forEach(x => x.classList.remove("sel"));
-  tr.classList.add("sel");
   if (layer) map1.fitBounds(layer.getBounds().pad(0.4), { animate: false, maxZoom: 14 });
   else if (c) map1.setView(c, Math.max(map1.getZoom(), 12), { animate: false });
-  if (layer) {
-    layer.setStyle(HILITE);
-    layer.openTooltip(layer.getBounds().getCenter());
-    setTimeout(() => layer.setStyle(OUTLINE), 2500);
-  }
+  selectPc(pc, map1);
 });
+for (const m of [map1, map2])                          // closing the popup (or clicking empty map) clears the selection
+  m.on("popupclose", e => { if (!S.reopening && e.popup._pc === S.sel) selectPc(null); });
 
 const fileIn = document.getElementById("file");
 let pickSlot = null;
 document.getElementById("pick").onclick = () => { pickSlot = null; fileIn.click(); };
-document.getElementById("slotBase").onclick = () => { pickSlot = "base"; fileIn.click(); };
+document.getElementById("slotGrow").onclick = () => { pickSlot = "grow"; fileIn.click(); };
+document.getElementById("slotDp").onclick = () => { pickSlot = "dp"; fileIn.click(); };
 document.getElementById("slotFut").onclick = () => { pickSlot = "fut"; fileIn.click(); };
 document.getElementById("slotGeo").onclick = () => { pickSlot = "geo"; fileIn.click(); };
 fileIn.onchange = () => { if (fileIn.files.length) loadFiles(fileIn.files, fileIn.files.length === 1 ? pickSlot : null); fileIn.value = ""; };
@@ -729,7 +733,7 @@ window.addEventListener("dragleave", () => { if (--depth <= 0) { depth = 0; drop
 window.addEventListener("drop", e => {
   e.preventDefault(); depth = 0; drop.classList.remove("show");
   const slot = e.target.closest && e.target.closest(".slot"), files = e.dataTransfer.files;
-  if (files.length) loadFiles(files, slot && files.length === 1 ? { slotFut: "fut", slotGeo: "geo", slotBase: "base" }[slot.id] : null);
+  if (files.length) loadFiles(files, slot && files.length === 1 ? { slotFut: "fut", slotGeo: "geo", slotGrow: "grow", slotDp: "dp" }[slot.id] : null);
 });
 </script>
 </body>
