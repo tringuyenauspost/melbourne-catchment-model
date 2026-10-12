@@ -439,7 +439,11 @@ function mix(t, from, to) {
   const ch = sh => Math.round(((a >> sh) & 255) + (((b >> sh) & 255) - ((a >> sh) & 255)) * t);
   return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
 }
-const growthColour = o => !o.b ? (o.f ? GROWTH_BINS[GROWTH_BINS.length - 1].c : null) : GROWTH_BINS.find(x => o.gr < x.max).c;
+// a postcode with forecast volume but no delivery points today: nothing to generate from, so no growth to colour
+const NO_POINTS = "#b9b9b3";
+const growthColour = o => !o.f ? (o.b || o.t ? NO_POINTS : null) : !o.b ? GROWTH_BINS[GROWTH_BINS.length - 1].c : GROWTH_BINS.find(x => o.gr < x.max).c;
+const noPointsItem = cells => cells.some(o => !o.f && (o.b || o.t))
+  ? `<div class="it"><span class="bx" style="background:${NO_POINTS}"></span>No delivery points to grow (${cells.filter(o => !o.f && (o.b || o.t)).length})</div>` : "";
 const quant = (arr, q) => { if (!arr.length) return 1; const a = arr.slice().sort((x, y) => x - y); return a[Math.floor(q * (a.length - 1))]; };
 
 // hover: just which postcode; the detail is in the popup a click opens
@@ -543,14 +547,14 @@ function renderMap(cells) {
   if (S.view === "growth") {
     drawCells(map1, cells, growthColour, true);
     leg = `<div class="t">Growth, future ÷ base</div>` +
-      GROWTH_BINS.map(x => `<div class="it"><span class="bx" style="background:${x.c}"></span>${x.l}</div>`).join("");
+      GROWTH_BINS.map(x => `<div class="it"><span class="bx" style="background:${x.c}"></span>${x.l}</div>`).join("") + noPointsItem(cells);
   } else if (S.view === "added") {
     const hi = Math.max(1, quant(cells.map(o => o.d).filter(d => d > 0), 0.98));
     const lo = Math.min(-1, quant(cells.map(o => o.d).filter(d => d < 0), 0.02));
-    drawCells(map1, cells, o => (o.b || o.f) ? (o.d >= 0 ? mix(Math.sqrt(o.d / hi), "#e5f5e0", "#00441b") : mix(Math.sqrt(o.d / lo), "#fde0dd", "#b2182b")) : null, true);
+    drawCells(map1, cells, o => !o.f ? (o.b || o.t ? NO_POINTS : null) : (o.b || o.f) ? (o.d >= 0 ? mix(Math.sqrt(o.d / hi), "#e5f5e0", "#00441b") : mix(Math.sqrt(o.d / lo), "#fde0dd", "#b2182b")) : null, true);
     leg = `<div class="t">Added ${unit()}, future − base</div>` +
       `<div class="grad" style="background:linear-gradient(90deg,#e5f5e0,#00441b)"></div><div class="ends"><span>0</span><span>+${fmt(hi)} more</span></div>` +
-      (lo < -1 ? `<div class="grad" style="background:linear-gradient(90deg,#fde0dd,#b2182b)"></div><div class="ends"><span>0</span><span>${fmt(lo)} fewer</span></div>` : "");
+      (lo < -1 ? `<div class="grad" style="background:linear-gradient(90deg,#fde0dd,#b2182b)"></div><div class="ends"><span>0</span><span>${fmt(lo)} fewer</span></div>` : "") + noPointsItem(cells);
   } else {
     const hi = Math.max(1, quant(cells.map(o => Math.max(o.b, o.f)), 0.98));
     const col = v => v > 0 ? mix(Math.sqrt(v / hi), "#dfe7fa", "#14306e") : null;
